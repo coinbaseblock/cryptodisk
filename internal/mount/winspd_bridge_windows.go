@@ -19,20 +19,60 @@ import (
 
 // ── WinSpd DLL bindings ─────────────────────────────────────────
 
+// spdDLLCandidates lists DLL names to try, in order of preference.
+// Standalone WinSpd ships winspd-x64.dll; WinFsp 2.0+ integrates the
+// same SPD exports into winfsp-x64.dll.
+var spdDLLCandidates = []string{
+	"winspd-x64.dll",
+	"winfsp-x64.dll",
+}
+
 var (
-	winSpdDLL = windows.NewLazyDLL("winspd-x64.dll")
+	winSpdDLL *windows.LazyDLL
 
-	procHandleOpen     = winSpdDLL.NewProc("SpdStorageUnitHandleOpen")
-	procHandleTransact = winSpdDLL.NewProc("SpdStorageUnitHandleTransact")
-	procHandleClose    = winSpdDLL.NewProc("SpdStorageUnitHandleClose")
+	procHandleOpen     *windows.LazyProc
+	procHandleTransact *windows.LazyProc
+	procHandleClose    *windows.LazyProc
 
-	procIoctlOpenDevice  = winSpdDLL.NewProc("SpdIoctlOpenDevice")
-	procIoctlProvision   = winSpdDLL.NewProc("SpdIoctlProvision")
-	procIoctlTransact    = winSpdDLL.NewProc("SpdIoctlTransact")
-	procIoctlUnprovision = winSpdDLL.NewProc("SpdIoctlUnprovision")
+	procIoctlOpenDevice  *windows.LazyProc
+	procIoctlProvision   *windows.LazyProc
+	procIoctlTransact    *windows.LazyProc
+	procIoctlUnprovision *windows.LazyProc
 
-	procVersion = winSpdDLL.NewProc("SpdVersion")
+	procVersion *windows.LazyProc
+
+	dllInitOnce sync.Once
+	dllInitErr  error
 )
+
+func initSpdDLL() error {
+	dllInitOnce.Do(func() {
+		for _, name := range spdDLLCandidates {
+			dll := windows.NewLazyDLL(name)
+			if err := dll.Load(); err != nil {
+				continue
+			}
+			// Check that at least one API set (Handle or IOCTL) is present.
+			hOpen := dll.NewProc("SpdStorageUnitHandleOpen")
+			iOpen := dll.NewProc("SpdIoctlOpenDevice")
+			if hOpen.Find() != nil && iOpen.Find() != nil {
+				continue // DLL exists but has no SPD exports
+			}
+			winSpdDLL = dll
+			procHandleOpen = dll.NewProc("SpdStorageUnitHandleOpen")
+			procHandleTransact = dll.NewProc("SpdStorageUnitHandleTransact")
+			procHandleClose = dll.NewProc("SpdStorageUnitHandleClose")
+			procIoctlOpenDevice = dll.NewProc("SpdIoctlOpenDevice")
+			procIoctlProvision = dll.NewProc("SpdIoctlProvision")
+			procIoctlTransact = dll.NewProc("SpdIoctlTransact")
+			procIoctlUnprovision = dll.NewProc("SpdIoctlUnprovision")
+			procVersion = dll.NewProc("SpdVersion")
+			return
+		}
+		dllInitErr = fmt.Errorf("%w (install WinSpd from github.com/winfsp/winspd or WinFsp 2.0+)", ErrBackendMissing)
+	})
+	return dllInitErr
+}
 
 const (
 	spdTransactReadKind  = 1
@@ -214,6 +254,9 @@ func spdIoctlOpen(params *spdStorageUnitParams) (*spdConn, error) {
 
 func availableProcSet(procs ...*windows.LazyProc) error {
 	for _, proc := range procs {
+		if proc == nil {
+			return fmt.Errorf("proc not initialized")
+		}
 		if err := proc.Find(); err != nil {
 			return fmt.Errorf("missing %s (%w)", proc.Name, err)
 		}
@@ -222,6 +265,9 @@ func availableProcSet(procs ...*windows.LazyProc) error {
 }
 
 func detectWinSpdVersion() string {
+	if procVersion == nil {
+		return "version unavailable"
+	}
 	if err := procVersion.Find(); err != nil {
 		return "version unavailable"
 	}
@@ -239,17 +285,32 @@ func detectWinSpdVersion() string {
 }
 
 func openWinSpd(params *spdStorageUnitParams) (*spdConn, error) {
-	if err := availableProcSet(procHandleOpen, procHandleTransact, procHandleClose); err == nil {
-		return spdHandleOpen(params)
-	}
-	if err := availableProcSet(procIoctlOpenDevice, procIoctlProvision, procIoctlTransact, procIoctlUnprovision); err == nil {
-		return spdIoctlOpen(params)
+	var handleErr, ioctlErr error
+
+	// Try Handle API (new WinSpd / WinFsp 2.0+).
+	if availableProcSet(procHandleOpen, procHandleTransact, procHandleClose) == nil {
+		conn, err := spdHandleOpen(params)
+		if err == nil {
+			return conn, nil
+		}
+		handleErr = err
+	} else {
+		handleErr = availableProcSet(procHandleOpen, procHandleTransact, procHandleClose)
 	}
 
-	handleErr := availableProcSet(procHandleOpen, procHandleTransact, procHandleClose)
-	ioctlErr := availableProcSet(procIoctlOpenDevice, procIoctlProvision, procIoctlTransact, procIoctlUnprovision)
+	// Fall back to IOCTL API (old standalone WinSpd).
+	if availableProcSet(procIoctlOpenDevice, procIoctlProvision, procIoctlTransact, procIoctlUnprovision) == nil {
+		conn, err := spdIoctlOpen(params)
+		if err == nil {
+			return conn, nil
+		}
+		ioctlErr = err
+	} else {
+		ioctlErr = availableProcSet(procIoctlOpenDevice, procIoctlProvision, procIoctlTransact, procIoctlUnprovision)
+	}
+
 	return nil, fmt.Errorf(
-		"winspd-x64.dll is incompatible: handle API %v; ioctl API %v; detected %s — install a WinSpd build that exports either API from github.com/winfsp/winspd",
+		"WinSpd unavailable: handle API: %v; ioctl API: %v; detected %s — install WinSpd from github.com/winfsp/winspd or WinFsp 2.0+",
 		handleErr,
 		ioctlErr,
 		detectWinSpdVersion(),
@@ -368,8 +429,8 @@ type WinSpdBridge struct {
 }
 
 func (b *WinSpdBridge) Mount(opts Options) error {
-	if err := winSpdDLL.Load(); err != nil {
-		return fmt.Errorf("%w (install WinSpd driver from github.com/winfsp/winspd)", ErrBackendMissing)
+	if err := initSpdDLL(); err != nil {
+		return err
 	}
 	if opts.Store == nil {
 		return fmt.Errorf("mount: extent store is required")
