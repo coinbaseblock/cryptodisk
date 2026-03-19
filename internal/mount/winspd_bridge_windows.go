@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -20,12 +21,24 @@ import (
 // ── WinSpd DLL bindings ─────────────────────────────────────────
 
 // spdDLLCandidates lists DLL names to try, in order of preference.
-// Standalone WinSpd ships winspd-x64.dll; WinFsp 2.0+ integrates the
-// same SPD exports into winfsp-x64.dll.
-var spdDLLCandidates = []string{
-	"winspd-x64.dll",
-	"winfsp-x64.dll",
-}
+// Standalone WinSpd ships winspd-{arch}.dll; WinFsp 2.0+ integrates the
+// same SPD exports into winfsp-{arch}.dll.
+// On ARM64 Windows we prefer the a64 (native) DLLs first, then fall back
+// to x64 which may work under emulation.
+var spdDLLCandidates = func() []string {
+	if runtime.GOARCH == "arm64" {
+		return []string{
+			"winspd-a64.dll",
+			"winfsp-a64.dll",
+			"winspd-x64.dll",
+			"winfsp-x64.dll",
+		}
+	}
+	return []string{
+		"winspd-x64.dll",
+		"winfsp-x64.dll",
+	}
+}()
 
 var (
 	winSpdDLL *windows.LazyDLL
