@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"ecdisk/internal/cryptovault"
@@ -37,9 +38,11 @@ func TestCreate_Basic(t *testing.T) {
 		t.Errorf("file size = %d, want %d", info.Size(), expectedSize)
 	}
 
-	// Permissions should be 0600
-	if info.Mode().Perm() != 0o600 {
-		t.Errorf("file mode = %o, want %o", info.Mode().Perm(), 0o600)
+	// Permissions should be 0600 (skip on Windows where NTFS has no Unix perms)
+	if runtime.GOOS != "windows" {
+		if info.Mode().Perm() != 0o600 {
+			t.Errorf("file mode = %o, want %o", info.Mode().Perm(), 0o600)
+		}
 	}
 }
 
