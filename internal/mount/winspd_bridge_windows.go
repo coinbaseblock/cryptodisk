@@ -152,7 +152,14 @@ func (c *spdConn) close() error {
 	return c.closeFn()
 }
 
+// spdHandleOpen opens via the Handle API using the global procs.
 func spdHandleOpen(params *spdStorageUnitParams) (*spdConn, error) {
+	return spdHandleOpenWith(procHandleOpen, procHandleTransact, procHandleClose, params)
+}
+
+// spdHandleOpenWith opens via the Handle API using the supplied procs.
+// This allows callers to try procs from alternate DLL candidates.
+func spdHandleOpenWith(pOpen, pTransact, pClose *windows.LazyProc, params *spdStorageUnitParams) (*spdConn, error) {
 	deviceName, err := windows.UTF16PtrFromString(defaultHandleDeviceName)
 	if err != nil {
 		return nil, fmt.Errorf("handle device name: %w", err)
@@ -160,7 +167,7 @@ func spdHandleOpen(params *spdStorageUnitParams) (*spdConn, error) {
 
 	var h windows.Handle
 	var btl uint32
-	r, _, _ := procHandleOpen.Call(
+	r, _, _ := pOpen.Call(
 		uintptr(unsafe.Pointer(deviceName)),
 		uintptr(unsafe.Pointer(params)),
 		uintptr(unsafe.Pointer(&h)),
@@ -175,7 +182,7 @@ func spdHandleOpen(params *spdStorageUnitParams) (*spdConn, error) {
 			if rsp != nil {
 				rspPtr = uintptr(unsafe.Pointer(rsp))
 			}
-			r, _, _ := procHandleTransact.Call(
+			r, _, _ := pTransact.Call(
 				uintptr(h),
 				uintptr(btl),
 				rspPtr,
@@ -188,20 +195,26 @@ func spdHandleOpen(params *spdStorageUnitParams) (*spdConn, error) {
 			return nil
 		},
 		closeFn: func() error {
-			procHandleClose.Call(uintptr(h))
+			pClose.Call(uintptr(h))
 			return nil
 		},
 	}, nil
 }
 
+// spdIoctlOpen opens via the IOCTL API using the global procs.
 func spdIoctlOpen(params *spdStorageUnitParams) (*spdConn, error) {
+	return spdIoctlOpenWith(procIoctlOpenDevice, procIoctlProvision, procIoctlTransact, procIoctlUnprovision, params)
+}
+
+// spdIoctlOpenWith opens via the IOCTL API using the supplied procs.
+func spdIoctlOpenWith(pOpen, pProv, pTransact, pUnprov *windows.LazyProc, params *spdStorageUnitParams) (*spdConn, error) {
 	deviceName, err := windows.UTF16PtrFromString(defaultIoctlDeviceName)
 	if err != nil {
 		return nil, fmt.Errorf("ioctl device name: %w", err)
 	}
 
 	var device windows.Handle
-	r, _, _ := procIoctlOpenDevice.Call(
+	r, _, _ := pOpen.Call(
 		uintptr(unsafe.Pointer(deviceName)),
 		uintptr(unsafe.Pointer(&device)),
 	)
@@ -210,7 +223,7 @@ func spdIoctlOpen(params *spdStorageUnitParams) (*spdConn, error) {
 	}
 
 	var btl uint32
-	r, _, _ = procIoctlProvision.Call(
+	r, _, _ = pProv.Call(
 		uintptr(device),
 		uintptr(unsafe.Pointer(params)),
 		uintptr(unsafe.Pointer(&btl)),
@@ -227,7 +240,7 @@ func spdIoctlOpen(params *spdStorageUnitParams) (*spdConn, error) {
 			if rsp != nil {
 				rspPtr = uintptr(unsafe.Pointer(rsp))
 			}
-			r, _, _ := procIoctlTransact.Call(
+			r, _, _ := pTransact.Call(
 				uintptr(device),
 				uintptr(btl),
 				rspPtr,
@@ -241,7 +254,7 @@ func spdIoctlOpen(params *spdStorageUnitParams) (*spdConn, error) {
 		},
 		closeFn: func() error {
 			var firstErr error
-			if r, _, _ := procIoctlUnprovision.Call(uintptr(device), uintptr(unsafe.Pointer(&guid))); r != 0 {
+			if r, _, _ := pUnprov.Call(uintptr(device), uintptr(unsafe.Pointer(&guid))); r != 0 {
 				firstErr = fmt.Errorf("SpdIoctlUnprovision: %w", windows.Errno(r))
 			}
 			if err := windows.CloseHandle(device); err != nil && firstErr == nil {
@@ -284,6 +297,66 @@ func detectWinSpdVersion() string {
 	return fmt.Sprintf("version %d.%d (0x%08x)", major, minor, version)
 }
 
+// ensureSpdDriverRunning attempts to start the WinSpd/WinFsp kernel driver
+// service. WinSpd installs a DLL alongside a kernel driver, but the service
+// may not be running (e.g. after install without reboot, or manual stop).
+func ensureSpdDriverRunning() error {
+	for _, name := range []string{"WinSpd", "WinSpd.Launcher", "WinFsp.Launcher"} {
+		out, err := exec.Command("sc", "query", name).CombinedOutput()
+		if err != nil {
+			continue // service not installed
+		}
+		if strings.Contains(string(out), "RUNNING") {
+			return nil // already running
+		}
+		if err := exec.Command("sc", "start", name).Run(); err != nil {
+			continue
+		}
+		// Give the driver time to register its device object.
+		time.Sleep(2 * time.Second)
+		return nil
+	}
+	return fmt.Errorf("no WinSpd/WinFsp driver service found or could not start (try running as Administrator)")
+}
+
+// tryAlternateDLLs attempts to open a WinSpd connection using DLL candidates
+// other than the one selected by initSpdDLL. This handles the case where e.g.
+// winspd-x64.dll has IOCTL exports but the driver is broken, while
+// winfsp-x64.dll has working Handle API exports.
+func tryAlternateDLLs(params *spdStorageUnitParams) (*spdConn, error) {
+	for _, name := range spdDLLCandidates {
+		if winSpdDLL != nil && winSpdDLL.Name == name {
+			continue // already tried this one
+		}
+		dll := windows.NewLazyDLL(name)
+		if err := dll.Load(); err != nil {
+			continue
+		}
+
+		// Try Handle API from this DLL.
+		hOpen := dll.NewProc("SpdStorageUnitHandleOpen")
+		hTransact := dll.NewProc("SpdStorageUnitHandleTransact")
+		hClose := dll.NewProc("SpdStorageUnitHandleClose")
+		if hOpen.Find() == nil && hTransact.Find() == nil && hClose.Find() == nil {
+			if conn, err := spdHandleOpenWith(hOpen, hTransact, hClose, params); err == nil {
+				return conn, nil
+			}
+		}
+
+		// Try IOCTL API from this DLL.
+		iOpen := dll.NewProc("SpdIoctlOpenDevice")
+		iProv := dll.NewProc("SpdIoctlProvision")
+		iTrans := dll.NewProc("SpdIoctlTransact")
+		iUnprov := dll.NewProc("SpdIoctlUnprovision")
+		if iOpen.Find() == nil && iProv.Find() == nil && iTrans.Find() == nil && iUnprov.Find() == nil {
+			if conn, err := spdIoctlOpenWith(iOpen, iProv, iTrans, iUnprov, params); err == nil {
+				return conn, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("no alternate DLL available")
+}
+
 func openWinSpd(params *spdStorageUnitParams) (*spdConn, error) {
 	var handleErr, ioctlErr error
 
@@ -305,8 +378,24 @@ func openWinSpd(params *spdStorageUnitParams) (*spdConn, error) {
 			return conn, nil
 		}
 		ioctlErr = err
+
+		// IOCTL device open failed — the driver service may not be running.
+		// Try to start it and retry once.
+		if svcErr := ensureSpdDriverRunning(); svcErr == nil {
+			conn, err = spdIoctlOpen(params)
+			if err == nil {
+				return conn, nil
+			}
+			ioctlErr = fmt.Errorf("%v (retried after starting service)", err)
+		}
 	} else {
 		ioctlErr = availableProcSet(procIoctlOpenDevice, procIoctlProvision, procIoctlTransact, procIoctlUnprovision)
+	}
+
+	// Both API paths failed with the primary DLL.
+	// Try alternate DLL candidates (e.g. winfsp-x64.dll when winspd-x64.dll failed).
+	if conn, err := tryAlternateDLLs(params); err == nil {
+		return conn, nil
 	}
 
 	return nil, fmt.Errorf(
