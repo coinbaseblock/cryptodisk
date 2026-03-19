@@ -39,6 +39,7 @@ type Header struct {
 	KDF              KDFParams
 	WrappedMasterKey []byte
 
+	RecoverySalt             [SaltSize]byte
 	RecoveryNonce            [NonceSize]byte
 	WrappedMasterKeyRecovery []byte
 
@@ -98,6 +99,9 @@ func WrapHeader(password, recoveryKey string, masterKey []byte, diskSizeBytes ui
 	if _, err := rand.Read(hdr.Nonce[:]); err != nil {
 		return nil, err
 	}
+	if _, err := rand.Read(hdr.RecoverySalt[:]); err != nil {
+		return nil, err
+	}
 	if _, err := rand.Read(hdr.RecoveryNonce[:]); err != nil {
 		return nil, err
 	}
@@ -110,7 +114,7 @@ func WrapHeader(password, recoveryKey string, masterKey []byte, diskSizeBytes ui
 	aad := buildAAD(&hdr)
 	hdr.WrappedMasterKey = aead.Seal(nil, hdr.Nonce[:], masterKey, aad)
 
-	rSalt := recoverySalt(hdr.Salt[:])
+	rSalt := recoverySalt(hdr.RecoverySalt[:])
 	rkek := argon2.IDKey([]byte(normalizeRecoveryKey(recoveryKey)), rSalt, 2, 64*1024, 2, 32)
 	raead, err := chacha20poly1305.NewX(rkek)
 	if err != nil {
@@ -134,7 +138,7 @@ func UnlockWithPassword(hdr *Header, password string) (*UnlockBundle, error) {
 }
 
 func UnlockWithRecovery(hdr *Header, recoveryKey string) (*UnlockBundle, error) {
-	rSalt := recoverySalt(hdr.Salt[:])
+	rSalt := recoverySalt(hdr.RecoverySalt[:])
 	rkek := argon2.IDKey([]byte(normalizeRecoveryKey(recoveryKey)), rSalt, 2, 64*1024, 2, 32)
 	raead, err := chacha20poly1305.NewX(rkek)
 	if err != nil {
@@ -195,6 +199,8 @@ func SerializeHeader(w io.Writer, hdr *Header) error {
 	off += 4
 	copy(buf[off:off+len(hdr.WrappedMasterKey)], hdr.WrappedMasterKey)
 	off += len(hdr.WrappedMasterKey)
+	copy(buf[off:off+SaltSize], hdr.RecoverySalt[:])
+	off += SaltSize
 	copy(buf[off:off+NonceSize], hdr.RecoveryNonce[:])
 	off += NonceSize
 	binary.LittleEndian.PutUint32(buf[off:off+4], uint32(len(hdr.WrappedMasterKeyRecovery)))
@@ -243,6 +249,8 @@ func ParseHeader(r io.Reader) (*Header, error) {
 	off += 4
 	hdr.WrappedMasterKey = append([]byte(nil), buf[off:off+wmLen]...)
 	off += wmLen
+	copy(hdr.RecoverySalt[:], buf[off:off+SaltSize])
+	off += SaltSize
 	copy(hdr.RecoveryNonce[:], buf[off:off+NonceSize])
 	off += NonceSize
 	wrLen := int(binary.LittleEndian.Uint32(buf[off : off+4]))

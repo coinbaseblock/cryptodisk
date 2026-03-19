@@ -3,5 +3,5 @@
 package mount
 
 func DefaultBackend() Backend {
-	return WinSpdBridge{}
+	return &WinSpdBridge{}
 }
