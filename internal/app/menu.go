@@ -1,0 +1,341 @@
+package app
+
+import (
+	"bufio"
+	"fmt"
+	"os"
+	"strings"
+)
+
+// ─── UI helpers ──────────────────────────────────────────────────────
+
+const (
+	colorReset  = "\033[0m"
+	colorBold   = "\033[1m"
+	colorDim    = "\033[2m"
+	colorCyan   = "\033[36m"
+	colorGreen  = "\033[32m"
+	colorYellow = "\033[33m"
+	colorRed    = "\033[31m"
+	colorWhite  = "\033[97m"
+)
+
+func banner() {
+	fmt.Println()
+	fmt.Println(colorCyan + colorBold + "  ╔══════════════════════════════════════╗")
+	fmt.Println("  ║          🔒  ECDISK  v1.0            ║")
+	fmt.Println("  ║     Encrypted Container Manager      ║")
+	fmt.Println("  ╚══════════════════════════════════════╝" + colorReset)
+	fmt.Println()
+}
+
+func menuHeader(title string) {
+	w := 40
+	pad := w - len(title) - 2
+	left := pad / 2
+	right := pad - left
+	fmt.Println()
+	fmt.Println(colorCyan + "  ┌" + strings.Repeat("─", w) + "┐")
+	fmt.Printf("  │%s %s%s%s %s│\n", strings.Repeat(" ", left), colorBold+colorWhite, title, colorReset+colorCyan, strings.Repeat(" ", right))
+	fmt.Println("  └" + strings.Repeat("─", w) + "┘" + colorReset)
+	fmt.Println()
+}
+
+func menuItem(num string, label string, desc string) {
+	fmt.Printf("    %s%s%s  %-22s %s%s%s\n", colorGreen+colorBold, num, colorReset, label, colorDim, desc, colorReset)
+}
+
+func separator() {
+	fmt.Println(colorDim + "    " + strings.Repeat("─", 48) + colorReset)
+}
+
+func successMsg(msg string) {
+	fmt.Printf("\n  %s✓ %s%s\n\n", colorGreen, msg, colorReset)
+}
+
+func errorMsg(msg string) {
+	fmt.Printf("\n  %s✗ %s%s\n\n", colorRed, msg, colorReset)
+}
+
+func promptInput(label string) (string, error) {
+	fmt.Printf("  %s%s%s ", colorYellow+"›"+colorReset, colorBold, label)
+	fmt.Print(colorReset)
+	br := bufio.NewReader(os.Stdin)
+	s, err := br.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(s), nil
+}
+
+func promptSecret(label string) (string, error) {
+	fmt.Printf("  %s%s%s ", colorYellow+"›"+colorReset, colorBold, label)
+	fmt.Print(colorReset)
+	br := bufio.NewReader(os.Stdin)
+	s, err := br.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(s), nil
+}
+
+// ─── Interactive menu ────────────────────────────────────────────────
+
+func interactiveMenu() {
+	reader := bufio.NewReader(os.Stdin)
+
+	for {
+		banner()
+
+		menuHeader("Main Menu")
+
+		menuItem("1", "Create Container", "Initialize a new encrypted container")
+		menuItem("2", "Inspect Container", "View container metadata")
+		menuItem("3", "Change Password", "Change container password")
+		menuItem("4", "Recover Container", "Unlock with recovery key")
+		fmt.Println()
+		separator()
+		fmt.Println()
+		menuItem("5", "Create VHDX", "Create a blank VHDX file")
+		menuItem("6", "Create Diff VHDX", "Create a differencing VHDX")
+		fmt.Println()
+		separator()
+		fmt.Println()
+		menuItem("7", "Mount Container", "Mount as virtual drive")
+		menuItem("8", "Unmount Container", "Unmount a virtual drive")
+		fmt.Println()
+		separator()
+		fmt.Println()
+		menuItem("0", "Exit", "")
+
+		fmt.Println()
+		fmt.Printf("  %sSelect an option:%s ", colorBold, colorReset)
+
+		choice, err := reader.ReadString('\n')
+		if err != nil {
+			return
+		}
+		choice = strings.TrimSpace(choice)
+
+		switch choice {
+		case "1":
+			menuCreateContainer()
+		case "2":
+			menuInspect()
+		case "3":
+			menuPasswd()
+		case "4":
+			menuRecover()
+		case "5":
+			menuMkVHDX()
+		case "6":
+			menuDiffVHDX()
+		case "7":
+			menuMount()
+		case "8":
+			menuUnmount()
+		case "0", "q", "Q":
+			fmt.Println()
+			fmt.Println(colorDim + "  Goodbye!" + colorReset)
+			fmt.Println()
+			return
+		default:
+			errorMsg("Invalid option. Please try again.")
+		}
+
+		fmt.Println()
+		fmt.Printf("  %sPress Enter to continue...%s", colorDim, colorReset)
+		reader.ReadString('\n')
+		clearScreen()
+	}
+}
+
+func clearScreen() {
+	fmt.Print("\033[2J\033[H")
+}
+
+// ─── Menu handlers ──────────────────────────────────────────────────
+
+func menuCreateContainer() {
+	menuHeader("Create New Container")
+
+	path, err := promptInput("Container file path:")
+	if err != nil || path == "" {
+		errorMsg("Container path is required")
+		return
+	}
+
+	sizeStr, err := promptInput("Disk size in GB:")
+	if err != nil || sizeStr == "" {
+		errorMsg("Size is required")
+		return
+	}
+
+	extentStr, _ := promptInput("Extent size in MB (default 4):")
+	if extentStr == "" {
+		extentStr = "4"
+	}
+
+	args := []string{"--container", path, "--size-gb", sizeStr, "--extent-mb", extentStr}
+	if err := cmdInit(args); err != nil {
+		errorMsg(err.Error())
+	} else {
+		successMsg("Container created successfully!")
+	}
+}
+
+func menuInspect() {
+	menuHeader("Inspect Container")
+
+	path, err := promptInput("Container file path:")
+	if err != nil || path == "" {
+		errorMsg("Container path is required")
+		return
+	}
+
+	fmt.Println()
+	if err := cmdInspect([]string{"--container", path}); err != nil {
+		errorMsg(err.Error())
+	}
+}
+
+func menuPasswd() {
+	menuHeader("Change Password")
+
+	path, err := promptInput("Container file path:")
+	if err != nil || path == "" {
+		errorMsg("Container path is required")
+		return
+	}
+
+	if err := cmdPasswd([]string{"--container", path}); err != nil {
+		errorMsg(err.Error())
+	} else {
+		successMsg("Password changed successfully!")
+	}
+}
+
+func menuRecover() {
+	menuHeader("Recover Container")
+
+	path, err := promptInput("Container file path:")
+	if err != nil || path == "" {
+		errorMsg("Container path is required")
+		return
+	}
+
+	key, err := promptInput("Recovery key:")
+	if err != nil || key == "" {
+		errorMsg("Recovery key is required")
+		return
+	}
+
+	if err := cmdRecover([]string{"--container", path, "--recovery", key}); err != nil {
+		errorMsg(err.Error())
+	} else {
+		successMsg("Container recovered and password reset!")
+	}
+}
+
+func menuMkVHDX() {
+	menuHeader("Create VHDX")
+
+	path, err := promptInput("VHDX file path:")
+	if err != nil || path == "" {
+		errorMsg("Path is required")
+		return
+	}
+
+	sizeStr, err := promptInput("Size in GB:")
+	if err != nil || sizeStr == "" {
+		errorMsg("Size is required")
+		return
+	}
+
+	blockStr, _ := promptInput("Block size in MB (default 4):")
+	if blockStr == "" {
+		blockStr = "4"
+	}
+
+	if err := cmdMkVHDX([]string{"--path", path, "--size-gb", sizeStr, "--block-mb", blockStr}); err != nil {
+		errorMsg(err.Error())
+	} else {
+		successMsg("VHDX created successfully!")
+	}
+}
+
+func menuDiffVHDX() {
+	menuHeader("Create Differencing VHDX")
+
+	base, err := promptInput("Base VHDX path:")
+	if err != nil || base == "" {
+		errorMsg("Base path is required")
+		return
+	}
+
+	path, err := promptInput("New VHDX path:")
+	if err != nil || path == "" {
+		errorMsg("Path is required")
+		return
+	}
+
+	blockStr, _ := promptInput("Block size in MB (default 4):")
+	if blockStr == "" {
+		blockStr = "4"
+	}
+
+	if err := cmdDiffVHDX([]string{"--path", path, "--base", base, "--block-mb", blockStr}); err != nil {
+		errorMsg(err.Error())
+	} else {
+		successMsg("Differencing VHDX created successfully!")
+	}
+}
+
+func menuMount() {
+	menuHeader("Mount Container")
+
+	path, err := promptInput("Container file path:")
+	if err != nil || path == "" {
+		errorMsg("Container path is required")
+		return
+	}
+
+	mountPoint, err := promptInput("Mount point (e.g. X:):")
+	if err != nil || mountPoint == "" {
+		errorMsg("Mount point is required")
+		return
+	}
+
+	idleStr, _ := promptInput("Idle timeout seconds (default 900):")
+	if idleStr == "" {
+		idleStr = "900"
+	}
+
+	cacheStr, _ := promptInput("Cache extents (default 128):")
+	if cacheStr == "" {
+		cacheStr = "128"
+	}
+
+	args := []string{"--container", path, "--mount", mountPoint, "--idle-seconds", idleStr, "--cache-extents", cacheStr}
+	if err := cmdMount(args); err != nil {
+		errorMsg(err.Error())
+	} else {
+		successMsg("Container mounted!")
+	}
+}
+
+func menuUnmount() {
+	menuHeader("Unmount Container")
+
+	mountPoint, err := promptInput("Mount point (e.g. X:):")
+	if err != nil || mountPoint == "" {
+		errorMsg("Mount point is required")
+		return
+	}
+
+	if err := cmdUnmount([]string{"--mount", mountPoint}); err != nil {
+		errorMsg(err.Error())
+	} else {
+		successMsg("Container unmounted!")
+	}
+}
