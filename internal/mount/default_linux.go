@@ -2,5 +2,16 @@
 
 package mount
 
-// DefaultBackend returns the NBD-based mount backend on Linux.
-func DefaultBackend() Backend { return newNBDBackend() }
+import "sync"
+
+var (
+	defaultNBD     *nbdBackend
+	defaultNBDOnce sync.Once
+)
+
+func DefaultBackend() Backend {
+	defaultNBDOnce.Do(func() {
+		defaultNBD = newNBDBackend()
+	})
+	return defaultNBD
+}
