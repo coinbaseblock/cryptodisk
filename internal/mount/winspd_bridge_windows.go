@@ -40,6 +40,9 @@ const (
 	spdTransactFlushKind = 3
 	spdTransactUnmapKind = 4
 
+	defaultHandleDeviceName = "WinSpd.Disk"
+	defaultIoctlDeviceName  = "WinSpd"
+
 	maxTransferLen = 64 * 1024 // 64 KiB
 )
 
@@ -110,10 +113,15 @@ func (c *spdConn) close() error {
 }
 
 func spdHandleOpen(params *spdStorageUnitParams) (*spdConn, error) {
+	deviceName, err := windows.UTF16PtrFromString(defaultHandleDeviceName)
+	if err != nil {
+		return nil, fmt.Errorf("handle device name: %w", err)
+	}
+
 	var h windows.Handle
 	var btl uint32
 	r, _, _ := procHandleOpen.Call(
-		0, // NULL → default device name "WinSpd.Disk"
+		uintptr(unsafe.Pointer(deviceName)),
 		uintptr(unsafe.Pointer(params)),
 		uintptr(unsafe.Pointer(&h)),
 		uintptr(unsafe.Pointer(&btl)),
@@ -147,9 +155,14 @@ func spdHandleOpen(params *spdStorageUnitParams) (*spdConn, error) {
 }
 
 func spdIoctlOpen(params *spdStorageUnitParams) (*spdConn, error) {
+	deviceName, err := windows.UTF16PtrFromString(defaultIoctlDeviceName)
+	if err != nil {
+		return nil, fmt.Errorf("ioctl device name: %w", err)
+	}
+
 	var device windows.Handle
 	r, _, _ := procIoctlOpenDevice.Call(
-		0, // NULL → default device name "WinSpd"
+		uintptr(unsafe.Pointer(deviceName)),
 		uintptr(unsafe.Pointer(&device)),
 	)
 	if r != 0 {
