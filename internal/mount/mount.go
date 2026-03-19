@@ -34,6 +34,9 @@ type Options struct {
 
 var ErrBackendMissing = errors.New("no block-device backend installed")
 
+// WinFspReleasesURL is the download page for WinFsp (required for mount).
+const WinFspReleasesURL = "https://github.com/winfsp/winfsp/releases"
+
 type Backend interface {
 	Mount(opts Options) error
 	Unmount(mountPoint string) error

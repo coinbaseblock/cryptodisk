@@ -6,6 +6,8 @@ import (
     "flag"
     "fmt"
     "os"
+    "os/exec"
+    "runtime"
     "strings"
 
     "ecdisk/internal/cache"
@@ -267,6 +269,7 @@ func cmdMount(args []string) error {
     })
     if errors.Is(err, mount.ErrBackendMissing) {
         h.Close()
+        openBrowser(mount.WinFspReleasesURL)
         return fmt.Errorf("password ok, but %v", err)
     }
     if err != nil {
@@ -286,6 +289,20 @@ func cmdUnmount(args []string) error {
         return errors.New("--mount is required")
     }
     return mount.DefaultBackend().Unmount(strings.ToUpper(*mountPoint))
+}
+
+// openBrowser opens a URL in the default browser. Best-effort, errors ignored.
+func openBrowser(url string) {
+    var cmd *exec.Cmd
+    switch runtime.GOOS {
+    case "windows":
+        cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+    case "darwin":
+        cmd = exec.Command("open", url)
+    default:
+        cmd = exec.Command("xdg-open", url)
+    }
+    cmd.Start()
 }
 
 func prompt(label string) (string, error) {

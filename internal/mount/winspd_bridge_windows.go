@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 
 	"ecdisk/internal/autolock"
 )
@@ -45,31 +47,96 @@ var (
 	dllInitErr  error
 )
 
+// winfspInstallDir returns the WinFsp installation directory from the registry,
+// or empty string if not found.
+func winfspInstallDir() string {
+	for _, root := range []registry.Key{registry.LOCAL_MACHINE, registry.CURRENT_USER} {
+		k, err := registry.OpenKey(root, `SOFTWARE\WinFsp`, registry.QUERY_VALUE|registry.WOW64_32KEY)
+		if err != nil {
+			continue
+		}
+		dir, _, err := k.GetStringValue("InstallDir")
+		k.Close()
+		if err == nil && dir != "" {
+			return dir
+		}
+	}
+	return ""
+}
+
+// spdDLLSearchPaths returns full paths to try for SPD-capable DLLs,
+// including well-known WinFsp install locations.
+func spdDLLSearchPaths() []string {
+	var paths []string
+
+	// 1. Bare names (found via system DLL search order / PATH).
+	paths = append(paths, spdDLLCandidates...)
+
+	// 2. WinFsp install dir from registry.
+	if dir := winfspInstallDir(); dir != "" {
+		paths = append(paths, filepath.Join(dir, "bin", "winfsp-x64.dll"))
+	}
+
+	// 3. Well-known Program Files locations.
+	for _, root := range []string{
+		os.Getenv("ProgramFiles(x86)"),
+		os.Getenv("ProgramFiles"),
+		`C:\Program Files (x86)`,
+		`C:\Program Files`,
+	} {
+		if root == "" {
+			continue
+		}
+		paths = append(paths,
+			filepath.Join(root, "WinFsp", "bin", "winfsp-x64.dll"),
+			filepath.Join(root, "WinSpd", "bin", "winspd-x64.dll"),
+		)
+	}
+
+	// Deduplicate.
+	seen := make(map[string]bool)
+	unique := paths[:0]
+	for _, p := range paths {
+		key := strings.ToLower(p)
+		if !seen[key] {
+			seen[key] = true
+			unique = append(unique, p)
+		}
+	}
+	return unique
+}
+
+func tryLoadSpdDLL(path string) bool {
+	dll := windows.NewLazyDLL(path)
+	if err := dll.Load(); err != nil {
+		return false
+	}
+	hOpen := dll.NewProc("SpdStorageUnitHandleOpen")
+	iOpen := dll.NewProc("SpdIoctlOpenDevice")
+	if hOpen.Find() != nil && iOpen.Find() != nil {
+		return false // DLL exists but has no SPD exports
+	}
+	winSpdDLL = dll
+	procHandleOpen = dll.NewProc("SpdStorageUnitHandleOpen")
+	procHandleTransact = dll.NewProc("SpdStorageUnitHandleTransact")
+	procHandleClose = dll.NewProc("SpdStorageUnitHandleClose")
+	procIoctlOpenDevice = dll.NewProc("SpdIoctlOpenDevice")
+	procIoctlProvision = dll.NewProc("SpdIoctlProvision")
+	procIoctlTransact = dll.NewProc("SpdIoctlTransact")
+	procIoctlUnprovision = dll.NewProc("SpdIoctlUnprovision")
+	procVersion = dll.NewProc("SpdVersion")
+	return true
+}
+
+
 func initSpdDLL() error {
 	dllInitOnce.Do(func() {
-		for _, name := range spdDLLCandidates {
-			dll := windows.NewLazyDLL(name)
-			if err := dll.Load(); err != nil {
-				continue
+		for _, path := range spdDLLSearchPaths() {
+			if tryLoadSpdDLL(path) {
+				return
 			}
-			// Check that at least one API set (Handle or IOCTL) is present.
-			hOpen := dll.NewProc("SpdStorageUnitHandleOpen")
-			iOpen := dll.NewProc("SpdIoctlOpenDevice")
-			if hOpen.Find() != nil && iOpen.Find() != nil {
-				continue // DLL exists but has no SPD exports
-			}
-			winSpdDLL = dll
-			procHandleOpen = dll.NewProc("SpdStorageUnitHandleOpen")
-			procHandleTransact = dll.NewProc("SpdStorageUnitHandleTransact")
-			procHandleClose = dll.NewProc("SpdStorageUnitHandleClose")
-			procIoctlOpenDevice = dll.NewProc("SpdIoctlOpenDevice")
-			procIoctlProvision = dll.NewProc("SpdIoctlProvision")
-			procIoctlTransact = dll.NewProc("SpdIoctlTransact")
-			procIoctlUnprovision = dll.NewProc("SpdIoctlUnprovision")
-			procVersion = dll.NewProc("SpdVersion")
-			return
 		}
-		dllInitErr = fmt.Errorf("%w — install WinFsp 2.0+ from https://github.com/winfsp/winfsp/releases", ErrBackendMissing)
+		dllInitErr = fmt.Errorf("%w — install WinFsp 2.0+ from %s", ErrBackendMissing, WinFspReleasesURL)
 	})
 	return dllInitErr
 }
@@ -324,11 +391,11 @@ func ensureSpdDriverRunning() error {
 // winspd-x64.dll has IOCTL exports but the driver is broken, while
 // winfsp-x64.dll has working Handle API exports.
 func tryAlternateDLLs(params *spdStorageUnitParams) (*spdConn, error) {
-	for _, name := range spdDLLCandidates {
-		if winSpdDLL != nil && winSpdDLL.Name == name {
+	for _, path := range spdDLLSearchPaths() {
+		if winSpdDLL != nil && strings.EqualFold(winSpdDLL.Name, path) {
 			continue // already tried this one
 		}
-		dll := windows.NewLazyDLL(name)
+		dll := windows.NewLazyDLL(path)
 		if err := dll.Load(); err != nil {
 			continue
 		}
@@ -399,7 +466,7 @@ func openWinSpd(params *spdStorageUnitParams) (*spdConn, error) {
 	}
 
 	ver := detectWinSpdVersion()
-	hint := "install WinFsp 2.0+ from https://github.com/winfsp/winfsp/releases"
+	hint := "install WinFsp 2.0+ from " + WinFspReleasesURL
 	if strings.Contains(ver, "1.0") || strings.Contains(ver, "0x0001") {
 		hint = "WinSpd 1.0 is too old and no longer supported; " + hint
 	}
