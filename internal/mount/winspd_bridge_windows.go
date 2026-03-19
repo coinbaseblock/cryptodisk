@@ -22,8 +22,10 @@ import (
 // ── WinSpd DLL bindings ─────────────────────────────────────────
 
 // spdDLLCandidates lists DLL names to try, in order of preference.
-// Standalone WinSpd ships winspd-{arch}.dll; WinFsp 2.0+ integrates the
-// same SPD exports into winfsp-{arch}.dll.
+// The SPD (Storage Proxy Driver) API lives in the standalone WinSpd DLL
+// (winspd-{arch}.dll) from https://github.com/winfsp/winspd. WinFsp does
+// NOT export SPD symbols; we include winfsp-{arch}.dll as a speculative
+// fallback in case a future WinFsp release integrates SPD support.
 // On ARM64 Windows we prefer the a64 (native) DLLs first, then fall back
 // to x64 which may work under emulation.
 var spdDLLCandidates = func() []string {
@@ -365,20 +367,30 @@ func detectWinSpdVersion() string {
 }
 
 func missingBackendHint() string {
-	const installURL = "install WinFsp 2.0+ from https://github.com/winfsp/winfsp/releases"
+	const spdURL = "https://github.com/winfsp/winspd/releases"
 
-	if dir, found := bundledWinFspDir(); found {
-		if winfspInstallDir() == "" {
-			return fmt.Sprintf("WinFsp runtime files were found in %s, but the driver is not installed. Run the bundled WinFsp MSI (or %s)", dir, installURL)
+	// Check whether a winspd DLL exists but was renamed (e.g. .bak).
+	renamedHint := ""
+	if exePath, err := os.Executable(); err == nil {
+		matches, _ := filepath.Glob(filepath.Join(filepath.Dir(exePath), "winspd-*.dll.*"))
+		if len(matches) > 0 {
+			renamedHint = fmt.Sprintf(" (note: %s exists — rename it back to .dll?)", filepath.Base(matches[0]))
 		}
-		return fmt.Sprintf("WinFsp appears to be installed, but no usable SPD exports were found. Repair or upgrade the installation (%s)", installURL)
 	}
 
 	if winfspInstallDir() != "" {
-		return fmt.Sprintf("WinFsp appears to be installed, but no usable SPD exports were found. Repair or upgrade the installation (%s)", installURL)
+		return fmt.Sprintf(
+			"WinFsp is installed but does not include block-device (SPD) support. "+
+				"Install the standalone WinSpd driver from %s%s", spdURL, renamedHint)
 	}
 
-	return installURL
+	if _, found := bundledWinFspDir(); found {
+		return fmt.Sprintf(
+			"WinFsp runtime files were found nearby but WinFsp alone cannot expose a block device. "+
+				"Install the standalone WinSpd driver from %s%s", spdURL, renamedHint)
+	}
+
+	return fmt.Sprintf("install the WinSpd driver from %s%s", spdURL, renamedHint)
 }
 
 func bundledWinFspDir() (string, bool) {
