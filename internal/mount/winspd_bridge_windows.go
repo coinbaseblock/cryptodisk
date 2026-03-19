@@ -45,9 +45,54 @@ var (
 	dllInitErr  error
 )
 
+// winfspInstallDir queries the Windows registry for WinFsp's installation
+// directory and returns the path to its DLL folder (bin/). Returns "" if
+// WinFsp is not found in the registry.
+func winfspInstallDir() string {
+	for _, root := range []windows.Handle{windows.HKEY_LOCAL_MACHINE, windows.HKEY_CURRENT_USER} {
+		var k windows.Handle
+		kpath, _ := windows.UTF16PtrFromString(`SOFTWARE\WinFsp`)
+		if err := windows.RegOpenKeyEx(root, kpath, 0, windows.KEY_READ|windows.KEY_WOW64_64KEY, &k); err != nil {
+			// Also try the 32-bit view (WinFsp may register there).
+			if err := windows.RegOpenKeyEx(root, kpath, 0, windows.KEY_READ|windows.KEY_WOW64_32KEY, &k); err != nil {
+				continue
+			}
+		}
+		defer windows.RegCloseKey(k)
+
+		vname, _ := windows.UTF16PtrFromString("InstallDir")
+		var dtype uint32
+		var size uint32
+		if err := windows.RegQueryValueEx(k, vname, nil, &dtype, nil, &size); err != nil || size == 0 {
+			continue
+		}
+		buf := make([]uint16, size/2)
+		if err := windows.RegQueryValueEx(k, vname, nil, &dtype, (*byte)(unsafe.Pointer(&buf[0])), &size); err != nil {
+			continue
+		}
+		dir := strings.TrimRight(windows.UTF16ToString(buf), "\x00")
+		if dir != "" {
+			return dir + `bin\`
+		}
+	}
+	return ""
+}
+
 func initSpdDLL() error {
 	dllInitOnce.Do(func() {
+		// Build search list: try DLLs by bare name (system PATH) first,
+		// then by full path under WinFsp's registry install directory.
+		candidates := make([]string, 0, len(spdDLLCandidates)*2)
 		for _, name := range spdDLLCandidates {
+			candidates = append(candidates, name)
+		}
+		if dir := winfspInstallDir(); dir != "" {
+			for _, name := range spdDLLCandidates {
+				candidates = append(candidates, dir+name)
+			}
+		}
+
+		for _, name := range candidates {
 			dll := windows.NewLazyDLL(name)
 			if err := dll.Load(); err != nil {
 				continue
@@ -324,7 +369,18 @@ func ensureSpdDriverRunning() error {
 // winspd-x64.dll has IOCTL exports but the driver is broken, while
 // winfsp-x64.dll has working Handle API exports.
 func tryAlternateDLLs(params *spdStorageUnitParams) (*spdConn, error) {
+	// Build the same expanded candidate list as initSpdDLL.
+	candidates := make([]string, 0, len(spdDLLCandidates)*2)
 	for _, name := range spdDLLCandidates {
+		candidates = append(candidates, name)
+	}
+	if dir := winfspInstallDir(); dir != "" {
+		for _, name := range spdDLLCandidates {
+			candidates = append(candidates, dir+name)
+		}
+	}
+
+	for _, name := range candidates {
 		if winSpdDLL != nil && winSpdDLL.Name == name {
 			continue // already tried this one
 		}
