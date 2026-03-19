@@ -72,7 +72,8 @@ This prototype currently includes:
 - encrypted extent read/write primitives
 - VHDX create / differencing wrappers via `go-winio`
 
-It does **not** yet include the final pure-Go Windows block device server needed to expose the decrypted container as a mounted drive letter. That part needs either:
+The mount/unmount commands require the **WinSpd** (Storage Proxy Driver) kernel driver and DLL to be installed. WinSpd is a separate project from WinFsp — WinFsp handles file systems while WinSpd handles block devices. Get WinSpd from https://github.com/winfsp/winspd/releases.
 
-1. a WinSpd integration layer written in Go/CGO, or
-2. a file-system approach such as WinFsp/go-winfsp instead of a block-device mount.
+Note: WinFsp alone is **not** sufficient for mounting. Although WinFsp is a related project under the same organisation, it does not export the SPD symbols needed by ecdisk.
+
+A future alternative approach could use WinFsp/go-winfsp to present the container as a file system rather than a block device.
