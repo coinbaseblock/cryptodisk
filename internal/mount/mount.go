@@ -1,6 +1,9 @@
 package mount
 
-import "errors"
+import (
+	"errors"
+	"strings"
+)
 
 // ExtentStore abstracts encrypted extent I/O. The container.Handle and
 // cache.WriteBack types both satisfy this interface.
@@ -37,4 +40,31 @@ var ErrBackendMissing = errors.New("no block-device backend installed")
 type Backend interface {
 	Mount(opts Options) error
 	Unmount(mountPoint string) error
+}
+
+// NormalizeMountPoint canonicalizes a user-supplied mount target.
+// Drive-letter mount points such as "x", "x:", "x:\", and " x:/ "
+// are normalized to "X:" so both CLI and backend logic treat them
+// consistently.
+func NormalizeMountPoint(mountPoint string) string {
+	s := strings.TrimSpace(mountPoint)
+	s = strings.TrimRight(s, `\/`)
+	if len(s) == 1 && isDriveLetter(s[0]) {
+		return strings.ToUpper(s) + ":"
+	}
+	if len(s) == 2 && s[1] == ':' && isDriveLetter(s[0]) {
+		return strings.ToUpper(s)
+	}
+	return s
+}
+
+func isDriveLetter(b byte) bool {
+	switch {
+	case b >= 'A' && b <= 'Z':
+		return true
+	case b >= 'a' && b <= 'z':
+		return true
+	default:
+		return false
+	}
 }

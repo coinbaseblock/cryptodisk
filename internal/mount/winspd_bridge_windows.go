@@ -136,7 +136,7 @@ func initSpdDLL() error {
 			procVersion = dll.NewProc("SpdVersion")
 			return
 		}
-		dllInitErr = fmt.Errorf("%w — install WinFsp 2.0+ from https://github.com/winfsp/winfsp/releases", ErrBackendMissing)
+		dllInitErr = fmt.Errorf("%w — %s", ErrBackendMissing, missingBackendHint())
 	})
 	return dllInitErr
 }
@@ -362,6 +362,48 @@ func detectWinSpdVersion() string {
 		return fmt.Sprintf("version 0x%08x", version)
 	}
 	return fmt.Sprintf("version %d.%d (0x%08x)", major, minor, version)
+}
+
+func missingBackendHint() string {
+	const installURL = "install WinFsp 2.0+ from https://github.com/winfsp/winfsp/releases"
+
+	if dir, found := bundledWinFspDir(); found {
+		if winfspInstallDir() == "" {
+			return fmt.Sprintf("WinFsp runtime files were found in %s, but the driver is not installed. Run the bundled WinFsp MSI (or %s)", dir, installURL)
+		}
+		return fmt.Sprintf("WinFsp appears to be installed, but no usable SPD exports were found. Repair or upgrade the installation (%s)", installURL)
+	}
+
+	if winfspInstallDir() != "" {
+		return fmt.Sprintf("WinFsp appears to be installed, but no usable SPD exports were found. Repair or upgrade the installation (%s)", installURL)
+	}
+
+	return installURL
+}
+
+func bundledWinFspDir() (string, bool) {
+	dirs := []string{}
+	if exePath, err := os.Executable(); err == nil {
+		dirs = append(dirs, filepath.Dir(exePath))
+	}
+	if wd, err := os.Getwd(); err == nil {
+		dirs = append(dirs, wd)
+	}
+
+	seen := make(map[string]bool, len(dirs))
+	for _, dir := range dirs {
+		if dir == "" || seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		for _, pattern := range []string{"winfsp-*.dll", "winfsp-*.sys", "winfsp-*.msi", "launchctl-*.exe", "launcher-*.exe"} {
+			matches, err := filepath.Glob(filepath.Join(dir, pattern))
+			if err == nil && len(matches) > 0 {
+				return dir, true
+			}
+		}
+	}
+	return "", false
 }
 
 // ensureSpdDriverRunning attempts to start the WinSpd/WinFsp kernel driver
@@ -699,7 +741,7 @@ func guidFromPath(path string) [16]byte {
 }
 
 func parseDriveLetter(mp string) string {
-	s := strings.TrimSuffix(strings.ToUpper(mp), ":")
+	s := strings.TrimSuffix(strings.ToUpper(NormalizeMountPoint(mp)), ":")
 	if len(s) == 1 && s[0] >= 'A' && s[0] <= 'Z' {
 		return s
 	}

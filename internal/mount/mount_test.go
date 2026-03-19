@@ -74,3 +74,21 @@ func TestOptions_Fields(t *testing.T) {
 		t.Error("Store is nil")
 	}
 }
+
+func TestNormalizeMountPoint(t *testing.T) {
+	tests := map[string]string{
+		"x":                 "X:",
+		"x:":                "X:",
+		"x:\\":              "X:",
+		" x:/ ":             "X:",
+		"Z:\\\\":            "Z:",
+		"\\\\server\\share": "\\\\server\\share",
+		"":                  "",
+	}
+
+	for input, want := range tests {
+		if got := NormalizeMountPoint(input); got != want {
+			t.Fatalf("NormalizeMountPoint(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
