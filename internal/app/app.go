@@ -267,7 +267,7 @@ func cmdMount(args []string) error {
     })
     if errors.Is(err, mount.ErrBackendMissing) {
         h.Close()
-        return fmt.Errorf("password ok, but mount backend is not implemented in this build yet")
+        return fmt.Errorf("password ok, but %v", err)
     }
     if err != nil {
         h.Close()
