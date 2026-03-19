@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -93,11 +94,19 @@ func winfspInstallDir() string {
 
 func initSpdDLL() error {
 	dllInitOnce.Do(func() {
-		// Build search list: try DLLs by bare name (system PATH) first,
-		// then by full path under WinFsp's registry install directory.
-		candidates := make([]string, 0, len(spdDLLCandidates)*2)
+		// Build search list: bare name (system PATH), then exe directory,
+		// then WinFsp's registry install directory.
+		candidates := make([]string, 0, len(spdDLLCandidates)*3)
 		for _, name := range spdDLLCandidates {
 			candidates = append(candidates, name)
+		}
+		// Also search the directory where the executable lives — supports
+		// portable/uninstalled deployments with DLLs next to the .exe.
+		if exePath, err := os.Executable(); err == nil {
+			exeDir := filepath.Dir(exePath) + string(filepath.Separator)
+			for _, name := range spdDLLCandidates {
+				candidates = append(candidates, exeDir+name)
+			}
 		}
 		if dir := winfspInstallDir(); dir != "" {
 			for _, name := range spdDLLCandidates {
@@ -383,9 +392,15 @@ func ensureSpdDriverRunning() error {
 // winfsp-x64.dll has working Handle API exports.
 func tryAlternateDLLs(params *spdStorageUnitParams) (*spdConn, error) {
 	// Build the same expanded candidate list as initSpdDLL.
-	candidates := make([]string, 0, len(spdDLLCandidates)*2)
+	candidates := make([]string, 0, len(spdDLLCandidates)*3)
 	for _, name := range spdDLLCandidates {
 		candidates = append(candidates, name)
+	}
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath) + string(filepath.Separator)
+		for _, name := range spdDLLCandidates {
+			candidates = append(candidates, exeDir+name)
+		}
 	}
 	if dir := winfspInstallDir(); dir != "" {
 		for _, name := range spdDLLCandidates {
