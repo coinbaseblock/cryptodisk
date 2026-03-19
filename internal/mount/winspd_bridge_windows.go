@@ -20,10 +20,18 @@ import (
 // ── WinSpd DLL bindings ─────────────────────────────────────────
 
 var (
-	winSpdDLL          = windows.NewLazyDLL("winspd-x64.dll")
+	winSpdDLL = windows.NewLazyDLL("winspd-x64.dll")
+
 	procHandleOpen     = winSpdDLL.NewProc("SpdStorageUnitHandleOpen")
 	procHandleTransact = winSpdDLL.NewProc("SpdStorageUnitHandleTransact")
 	procHandleClose    = winSpdDLL.NewProc("SpdStorageUnitHandleClose")
+
+	procIoctlOpenDevice  = winSpdDLL.NewProc("SpdIoctlOpenDevice")
+	procIoctlProvision   = winSpdDLL.NewProc("SpdIoctlProvision")
+	procIoctlTransact    = winSpdDLL.NewProc("SpdIoctlTransact")
+	procIoctlUnprovision = winSpdDLL.NewProc("SpdIoctlUnprovision")
+
+	procVersion = winSpdDLL.NewProc("SpdVersion")
 )
 
 const (
@@ -64,15 +72,15 @@ type spdTransactReq struct {
 
 // spdUnitStatus matches SPD_IOCTL_STORAGE_UNIT_STATUS (32 bytes).
 type spdUnitStatus struct {
-	ScsiStatus  uint8    // 0
-	SenseKey    uint8    // 1
-	ASC         uint8    // 2
-	ASCQ        uint8    // 3
-	_           [4]byte  // 4
-	Information uint64   // 8
-	ReservedCSI uint64   // 16
-	ReservedSKS uint32   // 24
-	StatusFlags uint32   // 28
+	ScsiStatus  uint8   // 0
+	SenseKey    uint8   // 1
+	ASC         uint8   // 2
+	ASCQ        uint8   // 3
+	_           [4]byte // 4
+	Information uint64  // 8
+	ReservedCSI uint64  // 16
+	ReservedSKS uint32  // 24
+	StatusFlags uint32  // 28
 }
 
 // spdTransactRsp matches SPD_IOCTL_TRANSACT_RSP (48 bytes).
@@ -85,7 +93,23 @@ type spdTransactRsp struct {
 
 // ── DLL wrappers ────────────────────────────────────────────────
 
-func spdOpen(params *spdStorageUnitParams) (windows.Handle, uint32, error) {
+type spdConn struct {
+	closeFn    func() error
+	transactFn func(rsp *spdTransactRsp, req *spdTransactReq, buf unsafe.Pointer) error
+}
+
+func (c *spdConn) transact(rsp *spdTransactRsp, req *spdTransactReq, buf unsafe.Pointer) error {
+	return c.transactFn(rsp, req, buf)
+}
+
+func (c *spdConn) close() error {
+	if c.closeFn == nil {
+		return nil
+	}
+	return c.closeFn()
+}
+
+func spdHandleOpen(params *spdStorageUnitParams) (*spdConn, error) {
 	var h windows.Handle
 	var btl uint32
 	r, _, _ := procHandleOpen.Call(
@@ -95,38 +119,134 @@ func spdOpen(params *spdStorageUnitParams) (windows.Handle, uint32, error) {
 		uintptr(unsafe.Pointer(&btl)),
 	)
 	if r != 0 {
-		return 0, 0, fmt.Errorf("SpdStorageUnitHandleOpen: win32 error %d", r)
+		return nil, fmt.Errorf("SpdStorageUnitHandleOpen: %w", windows.Errno(r))
 	}
-	return h, btl, nil
+	return &spdConn{
+		transactFn: func(rsp *spdTransactRsp, req *spdTransactReq, buf unsafe.Pointer) error {
+			var rspPtr uintptr
+			if rsp != nil {
+				rspPtr = uintptr(unsafe.Pointer(rsp))
+			}
+			r, _, _ := procHandleTransact.Call(
+				uintptr(h),
+				uintptr(btl),
+				rspPtr,
+				uintptr(unsafe.Pointer(req)),
+				uintptr(buf),
+			)
+			if r != 0 {
+				return fmt.Errorf("SpdStorageUnitHandleTransact: %w", windows.Errno(r))
+			}
+			return nil
+		},
+		closeFn: func() error {
+			procHandleClose.Call(uintptr(h))
+			return nil
+		},
+	}, nil
 }
 
-func spdTransact(h windows.Handle, btl uint32, rsp *spdTransactRsp, req *spdTransactReq, buf unsafe.Pointer) error {
-	var rspPtr uintptr
-	if rsp != nil {
-		rspPtr = uintptr(unsafe.Pointer(rsp))
-	}
-	r, _, _ := procHandleTransact.Call(
-		uintptr(h),
-		uintptr(btl),
-		rspPtr,
-		uintptr(unsafe.Pointer(req)),
-		uintptr(buf),
+func spdIoctlOpen(params *spdStorageUnitParams) (*spdConn, error) {
+	var device windows.Handle
+	r, _, _ := procIoctlOpenDevice.Call(
+		0, // NULL → default device name "WinSpd"
+		uintptr(unsafe.Pointer(&device)),
 	)
 	if r != 0 {
-		return fmt.Errorf("SpdStorageUnitHandleTransact: win32 error %d", r)
+		return nil, fmt.Errorf("SpdIoctlOpenDevice: %w", windows.Errno(r))
+	}
+
+	var btl uint32
+	r, _, _ = procIoctlProvision.Call(
+		uintptr(device),
+		uintptr(unsafe.Pointer(params)),
+		uintptr(unsafe.Pointer(&btl)),
+	)
+	if r != 0 {
+		windows.CloseHandle(device)
+		return nil, fmt.Errorf("SpdIoctlProvision: %w", windows.Errno(r))
+	}
+
+	guid := params.Guid
+	return &spdConn{
+		transactFn: func(rsp *spdTransactRsp, req *spdTransactReq, buf unsafe.Pointer) error {
+			var rspPtr uintptr
+			if rsp != nil {
+				rspPtr = uintptr(unsafe.Pointer(rsp))
+			}
+			r, _, _ := procIoctlTransact.Call(
+				uintptr(device),
+				uintptr(btl),
+				rspPtr,
+				uintptr(unsafe.Pointer(req)),
+				uintptr(buf),
+			)
+			if r != 0 {
+				return fmt.Errorf("SpdIoctlTransact: %w", windows.Errno(r))
+			}
+			return nil
+		},
+		closeFn: func() error {
+			var firstErr error
+			if r, _, _ := procIoctlUnprovision.Call(uintptr(device), uintptr(unsafe.Pointer(&guid))); r != 0 {
+				firstErr = fmt.Errorf("SpdIoctlUnprovision: %w", windows.Errno(r))
+			}
+			if err := windows.CloseHandle(device); err != nil && firstErr == nil {
+				firstErr = err
+			}
+			return firstErr
+		},
+	}, nil
+}
+
+func availableProcSet(procs ...*windows.LazyProc) error {
+	for _, proc := range procs {
+		if err := proc.Find(); err != nil {
+			return fmt.Errorf("missing %s (%w)", proc.Name, err)
+		}
 	}
 	return nil
 }
 
-func spdClose(h windows.Handle) {
-	procHandleClose.Call(uintptr(h))
+func detectWinSpdVersion() string {
+	if err := procVersion.Find(); err != nil {
+		return "version unavailable"
+	}
+	var version uint32
+	r, _, _ := procVersion.Call(uintptr(unsafe.Pointer(&version)))
+	if r != 0 {
+		return fmt.Sprintf("version unavailable (%v)", windows.Errno(r))
+	}
+	major := version >> 16
+	minor := version & 0xffff
+	if major == 0 && minor == 0 {
+		return fmt.Sprintf("version 0x%08x", version)
+	}
+	return fmt.Sprintf("version %d.%d (0x%08x)", major, minor, version)
+}
+
+func openWinSpd(params *spdStorageUnitParams) (*spdConn, error) {
+	if err := availableProcSet(procHandleOpen, procHandleTransact, procHandleClose); err == nil {
+		return spdHandleOpen(params)
+	}
+	if err := availableProcSet(procIoctlOpenDevice, procIoctlProvision, procIoctlTransact, procIoctlUnprovision); err == nil {
+		return spdIoctlOpen(params)
+	}
+
+	handleErr := availableProcSet(procHandleOpen, procHandleTransact, procHandleClose)
+	ioctlErr := availableProcSet(procIoctlOpenDevice, procIoctlProvision, procIoctlTransact, procIoctlUnprovision)
+	return nil, fmt.Errorf(
+		"winspd-x64.dll is incompatible: handle API %v; ioctl API %v; detected %s — install a WinSpd build that exports either API from github.com/winfsp/winspd",
+		handleErr,
+		ioctlErr,
+		detectWinSpdVersion(),
+	)
 }
 
 // ── Session ─────────────────────────────────────────────────────
 
 type winspdSession struct {
-	handle  windows.Handle
-	btl     uint32
+	conn    *spdConn
 	bd      *BlockDev
 	dataBuf []byte
 	locker  *autolock.Manager
@@ -141,7 +261,7 @@ func (s *winspdSession) serve() {
 	buf := unsafe.Pointer(&s.dataBuf[0])
 
 	// First transact: no response, just receive the first request.
-	if err := spdTransact(s.handle, s.btl, nil, &req, buf); err != nil {
+	if err := s.conn.transact(nil, &req, buf); err != nil {
 		return
 	}
 
@@ -199,7 +319,7 @@ func (s *winspdSession) serve() {
 			return
 		}
 
-		if err := spdTransact(s.handle, s.btl, &rsp, &req, buf); err != nil {
+		if err := s.conn.transact(&rsp, &req, buf); err != nil {
 			return
 		}
 	}
@@ -217,9 +337,9 @@ func (s *winspdSession) shutdown() error {
 		s.locker.Stop()
 	}
 	s.bd.Flush()
-	spdClose(s.handle)
+	closeErr := s.conn.close()
 	<-s.done
-	return nil
+	return closeErr
 }
 
 // LockNow implements autolock.Locker.
@@ -237,14 +357,6 @@ type WinSpdBridge struct {
 func (b *WinSpdBridge) Mount(opts Options) error {
 	if err := winSpdDLL.Load(); err != nil {
 		return fmt.Errorf("%w (install WinSpd driver from github.com/winfsp/winspd)", ErrBackendMissing)
-	}
-	// Validate that all required procedures exist before calling them.
-	// LazyProc.Call uses mustFind which panics if a procedure is missing;
-	// Find returns an error instead, so we can give a helpful message.
-	for _, proc := range []*windows.LazyProc{procHandleOpen, procHandleTransact, procHandleClose} {
-		if err := proc.Find(); err != nil {
-			return fmt.Errorf("winspd-x64.dll is too old: missing %s (%w) — update WinSpd from github.com/winfsp/winspd", proc.Name, err)
-		}
 	}
 	if opts.Store == nil {
 		return fmt.Errorf("mount: extent store is required")
@@ -264,14 +376,13 @@ func (b *WinSpdBridge) Mount(opts Options) error {
 	// Snapshot existing physical drives so we can detect the new one.
 	before := listPhysicalDrives()
 
-	handle, btl, err := spdOpen(&params)
+	conn, err := openWinSpd(&params)
 	if err != nil {
 		return err
 	}
 
 	sess := &winspdSession{
-		handle:  handle,
-		btl:     btl,
+		conn:    conn,
 		bd:      bd,
 		dataBuf: make([]byte, maxTransferLen),
 		stop:    make(chan struct{}),
