@@ -16,11 +16,14 @@ import (
 
 func Main() {
     if len(os.Args) < 2 {
-        usage()
-        os.Exit(2)
+        interactiveMenu()
+        return
     }
     var err error
     switch os.Args[1] {
+    case "menu":
+        interactiveMenu()
+        return
     case "init":
         err = cmdInit(os.Args[2:])
     case "inspect":
@@ -37,7 +40,11 @@ func Main() {
         err = cmdMount(os.Args[2:])
     case "unmount":
         err = cmdUnmount(os.Args[2:])
+    case "help", "--help", "-h":
+        usage()
+        return
     default:
+        fmt.Fprintf(os.Stderr, "unknown command: %s\n\n", os.Args[1])
         usage()
         os.Exit(2)
     }
@@ -48,15 +55,39 @@ func Main() {
 }
 
 func usage() {
-    fmt.Println(`ecdisk commands:
-  init      --container FILE --size-gb N [--extent-mb 4]
-  inspect   --container FILE
-  passwd    --container FILE
-  recover   --container FILE --recovery KEY
-  mkvhdx    --path FILE --size-gb N [--block-mb 4]
-  diffvhdx  --base FILE --path FILE [--block-mb 4]
-  mount     --container FILE --mount X: [--idle-seconds 900 --cache-extents 128]
-  unmount   --mount X:`)
+    fmt.Println(`ecdisk - Encrypted Container Manager
+
+Usage:
+  ecdisk                (launch interactive menu)
+  ecdisk <command>      (run command directly)
+
+Commands:
+  init      Create a new encrypted container
+            --container FILE --size-gb N [--extent-mb 4]
+
+  inspect   View container metadata
+            --container FILE
+
+  passwd    Change container password
+            --container FILE
+
+  recover   Unlock with recovery key and set new password
+            --container FILE --recovery KEY
+
+  mkvhdx   Create a blank VHDX file (Windows)
+            --path FILE --size-gb N [--block-mb 4]
+
+  diffvhdx Create a differencing VHDX (Windows)
+            --base FILE --path FILE [--block-mb 4]
+
+  mount     Mount container as virtual drive
+            --container FILE --mount X: [--idle-seconds 900 --cache-extents 128]
+
+  unmount   Unmount a virtual drive
+            --mount X:
+
+  menu      Launch interactive menu
+  help      Show this help message`)
 }
 
 func cmdInit(args []string) error {
