@@ -10,43 +10,16 @@ import (
 // ─── UI helpers ──────────────────────────────────────────────────────
 
 const (
-	colorReset  = "\033[0m"
-	colorBold   = "\033[1m"
-	colorDim    = "\033[2m"
-	colorCyan   = "\033[36m"
-	colorGreen  = "\033[32m"
-	colorYellow = "\033[33m"
-	colorRed    = "\033[31m"
-	colorWhite  = "\033[97m"
+	colorReset = "\033[0m"
+	colorBold  = "\033[1m"
+	colorDim   = "\033[2m"
+	colorCyan  = "\033[36m"
+	colorGreen = "\033[32m"
+	colorRed   = "\033[31m"
 )
 
-func banner() {
-	fmt.Println()
-	fmt.Println(colorCyan + colorBold + "  ╔══════════════════════════════════════╗")
-	fmt.Println("  ║          🔒  ECDISK  v1.0            ║")
-	fmt.Println("  ║     Encrypted Container Manager      ║")
-	fmt.Println("  ╚══════════════════════════════════════╝" + colorReset)
-	fmt.Println()
-}
-
 func menuHeader(title string) {
-	w := 40
-	pad := w - len(title) - 2
-	left := pad / 2
-	right := pad - left
-	fmt.Println()
-	fmt.Println(colorCyan + "  ┌" + strings.Repeat("─", w) + "┐")
-	fmt.Printf("  │%s %s%s%s %s│\n", strings.Repeat(" ", left), colorBold+colorWhite, title, colorReset+colorCyan, strings.Repeat(" ", right))
-	fmt.Println("  └" + strings.Repeat("─", w) + "┘" + colorReset)
-	fmt.Println()
-}
-
-func menuItem(num string, label string, desc string) {
-	fmt.Printf("    %s%s%s  %-22s %s%s%s\n", colorGreen+colorBold, num, colorReset, label, colorDim, desc, colorReset)
-}
-
-func separator() {
-	fmt.Println(colorDim + "    " + strings.Repeat("─", 48) + colorReset)
+	fmt.Printf("\n  %s── %s ──%s\n\n", colorCyan+colorBold, title, colorReset)
 }
 
 func successMsg(msg string) {
@@ -58,19 +31,7 @@ func errorMsg(msg string) {
 }
 
 func promptInput(label string) (string, error) {
-	fmt.Printf("  %s%s%s ", colorYellow+"›"+colorReset, colorBold, label)
-	fmt.Print(colorReset)
-	br := bufio.NewReader(os.Stdin)
-	s, err := br.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(s), nil
-}
-
-func promptSecret(label string) (string, error) {
-	fmt.Printf("  %s%s%s ", colorYellow+"›"+colorReset, colorBold, label)
-	fmt.Print(colorReset)
+	fmt.Printf("  %s›%s %s", colorCyan, colorReset, label)
 	br := bufio.NewReader(os.Stdin)
 	s, err := br.ReadString('\n')
 	if err != nil {
@@ -81,43 +42,49 @@ func promptSecret(label string) (string, error) {
 
 // ─── Interactive menu ────────────────────────────────────────────────
 
+type menuEntry struct {
+	key, label string
+}
+
+var mainMenu = [][]menuEntry{
+	{
+		{"1", "Create Container"},
+		{"2", "Inspect Container"},
+		{"3", "Change Password"},
+		{"4", "Recover Container"},
+	},
+	{
+		{"5", "Create VHDX"},
+		{"6", "Create Diff VHDX"},
+	},
+	{
+		{"7", "Mount Container"},
+		{"8", "Unmount Container"},
+	},
+}
+
 func interactiveMenu() {
 	reader := bufio.NewReader(os.Stdin)
 
 	for {
-		banner()
+		fmt.Printf("\n  %sECDISK v1.0%s\n", colorBold, colorReset)
 
-		menuHeader("Main Menu")
+		for _, group := range mainMenu {
+			fmt.Println()
+			for _, item := range group {
+				fmt.Printf("    %s%s%s  %s\n", colorGreen, item.key, colorReset, item.label)
+			}
+		}
+		fmt.Printf("\n    %s0%s  Exit\n", colorDim, colorReset)
 
-		menuItem("1", "Create Container", "Initialize a new encrypted container")
-		menuItem("2", "Inspect Container", "View container metadata")
-		menuItem("3", "Change Password", "Change container password")
-		menuItem("4", "Recover Container", "Unlock with recovery key")
-		fmt.Println()
-		separator()
-		fmt.Println()
-		menuItem("5", "Create VHDX", "Create a blank VHDX file")
-		menuItem("6", "Create Diff VHDX", "Create a differencing VHDX")
-		fmt.Println()
-		separator()
-		fmt.Println()
-		menuItem("7", "Mount Container", "Mount as virtual drive")
-		menuItem("8", "Unmount Container", "Unmount a virtual drive")
-		fmt.Println()
-		separator()
-		fmt.Println()
-		menuItem("0", "Exit", "")
-
-		fmt.Println()
-		fmt.Printf("  %sSelect an option:%s ", colorBold, colorReset)
+		fmt.Printf("\n  %s>%s ", colorBold, colorReset)
 
 		choice, err := reader.ReadString('\n')
 		if err != nil {
 			return
 		}
-		choice = strings.TrimSpace(choice)
 
-		switch choice {
+		switch strings.TrimSpace(choice) {
 		case "1":
 			menuCreateContainer()
 		case "2":
@@ -136,42 +103,35 @@ func interactiveMenu() {
 			menuUnmount()
 		case "0", "q", "Q":
 			fmt.Println()
-			fmt.Println(colorDim + "  Goodbye!" + colorReset)
-			fmt.Println()
 			return
 		default:
-			errorMsg("Invalid option. Please try again.")
+			errorMsg("Invalid option")
 		}
 
-		fmt.Println()
 		fmt.Printf("  %sPress Enter to continue...%s", colorDim, colorReset)
 		reader.ReadString('\n')
-		clearScreen()
+		fmt.Print("\033[2J\033[H")
 	}
-}
-
-func clearScreen() {
-	fmt.Print("\033[2J\033[H")
 }
 
 // ─── Menu handlers ──────────────────────────────────────────────────
 
 func menuCreateContainer() {
-	menuHeader("Create New Container")
+	menuHeader("Create Container")
 
-	path, err := promptInput("Container file path:")
+	path, err := promptInput("Container file path: ")
 	if err != nil || path == "" {
 		errorMsg("Container path is required")
 		return
 	}
 
-	sizeStr, err := promptInput("Disk size in GB:")
+	sizeStr, err := promptInput("Disk size in GB: ")
 	if err != nil || sizeStr == "" {
 		errorMsg("Size is required")
 		return
 	}
 
-	extentStr, _ := promptInput("Extent size in MB (default 4):")
+	extentStr, _ := promptInput("Extent size in MB (default 4): ")
 	if extentStr == "" {
 		extentStr = "4"
 	}
@@ -187,7 +147,7 @@ func menuCreateContainer() {
 func menuInspect() {
 	menuHeader("Inspect Container")
 
-	path, err := promptInput("Container file path:")
+	path, err := promptInput("Container file path: ")
 	if err != nil || path == "" {
 		errorMsg("Container path is required")
 		return
@@ -202,7 +162,7 @@ func menuInspect() {
 func menuPasswd() {
 	menuHeader("Change Password")
 
-	path, err := promptInput("Container file path:")
+	path, err := promptInput("Container file path: ")
 	if err != nil || path == "" {
 		errorMsg("Container path is required")
 		return
@@ -218,13 +178,13 @@ func menuPasswd() {
 func menuRecover() {
 	menuHeader("Recover Container")
 
-	path, err := promptInput("Container file path:")
+	path, err := promptInput("Container file path: ")
 	if err != nil || path == "" {
 		errorMsg("Container path is required")
 		return
 	}
 
-	key, err := promptInput("Recovery key:")
+	key, err := promptInput("Recovery key: ")
 	if err != nil || key == "" {
 		errorMsg("Recovery key is required")
 		return
@@ -240,19 +200,19 @@ func menuRecover() {
 func menuMkVHDX() {
 	menuHeader("Create VHDX")
 
-	path, err := promptInput("VHDX file path:")
+	path, err := promptInput("VHDX file path: ")
 	if err != nil || path == "" {
 		errorMsg("Path is required")
 		return
 	}
 
-	sizeStr, err := promptInput("Size in GB:")
+	sizeStr, err := promptInput("Size in GB: ")
 	if err != nil || sizeStr == "" {
 		errorMsg("Size is required")
 		return
 	}
 
-	blockStr, _ := promptInput("Block size in MB (default 4):")
+	blockStr, _ := promptInput("Block size in MB (default 4): ")
 	if blockStr == "" {
 		blockStr = "4"
 	}
@@ -267,19 +227,19 @@ func menuMkVHDX() {
 func menuDiffVHDX() {
 	menuHeader("Create Differencing VHDX")
 
-	base, err := promptInput("Base VHDX path:")
+	base, err := promptInput("Base VHDX path: ")
 	if err != nil || base == "" {
 		errorMsg("Base path is required")
 		return
 	}
 
-	path, err := promptInput("New VHDX path:")
+	path, err := promptInput("New VHDX path: ")
 	if err != nil || path == "" {
 		errorMsg("Path is required")
 		return
 	}
 
-	blockStr, _ := promptInput("Block size in MB (default 4):")
+	blockStr, _ := promptInput("Block size in MB (default 4): ")
 	if blockStr == "" {
 		blockStr = "4"
 	}
@@ -294,24 +254,24 @@ func menuDiffVHDX() {
 func menuMount() {
 	menuHeader("Mount Container")
 
-	path, err := promptInput("Container file path:")
+	path, err := promptInput("Container file path: ")
 	if err != nil || path == "" {
 		errorMsg("Container path is required")
 		return
 	}
 
-	mountPoint, err := promptInput("Mount point (e.g. X:):")
+	mountPoint, err := promptInput("Mount point (e.g. X:): ")
 	if err != nil || mountPoint == "" {
 		errorMsg("Mount point is required")
 		return
 	}
 
-	idleStr, _ := promptInput("Idle timeout seconds (default 900):")
+	idleStr, _ := promptInput("Idle timeout seconds (default 900): ")
 	if idleStr == "" {
 		idleStr = "900"
 	}
 
-	cacheStr, _ := promptInput("Cache extents (default 128):")
+	cacheStr, _ := promptInput("Cache extents (default 128): ")
 	if cacheStr == "" {
 		cacheStr = "128"
 	}
@@ -327,7 +287,7 @@ func menuMount() {
 func menuUnmount() {
 	menuHeader("Unmount Container")
 
-	mountPoint, err := promptInput("Mount point (e.g. X:):")
+	mountPoint, err := promptInput("Mount point (e.g. X:): ")
 	if err != nil || mountPoint == "" {
 		errorMsg("Mount point is required")
 		return
