@@ -238,6 +238,14 @@ func (b *WinSpdBridge) Mount(opts Options) error {
 	if err := winSpdDLL.Load(); err != nil {
 		return fmt.Errorf("%w (install WinSpd driver from github.com/winfsp/winspd)", ErrBackendMissing)
 	}
+	// Validate that all required procedures exist before calling them.
+	// LazyProc.Call uses mustFind which panics if a procedure is missing;
+	// Find returns an error instead, so we can give a helpful message.
+	for _, proc := range []*windows.LazyProc{procHandleOpen, procHandleTransact, procHandleClose} {
+		if err := proc.Find(); err != nil {
+			return fmt.Errorf("winspd-x64.dll is too old: missing %s (%w) — update WinSpd from github.com/winfsp/winspd", proc.Name, err)
+		}
+	}
 	if opts.Store == nil {
 		return fmt.Errorf("mount: extent store is required")
 	}
