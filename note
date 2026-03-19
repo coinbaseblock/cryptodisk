@@ -1,0 +1,12 @@
+
+go mod tidy
+go build -o ecdisk.exe .
+
+
+ecdisk.exe init --container D:\vault.ecd --size-gb 20 --extent-mb 4
+ecdisk.exe inspect --container D:\vault.ecd
+ecdisk.exe passwd --container D:\vault.ecd
+ecdisk.exe recover --container D:\vault.ecd --recovery ABCD-EFGH-IJKL-MNOP-QRST-UVWX-YZ12-3456
+
+ecdisk.exe mkvhdx --path D:\blank.vhdx --size-gb 20 --block-mb 4
+ecdisk.exe diffvhdx --base D:\base.vhdx --path D:\child.vhdx --block-mb 4
