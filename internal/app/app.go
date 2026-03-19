@@ -8,6 +8,7 @@ import (
     "os"
     "strings"
 
+    "ecdisk/internal/cache"
     "ecdisk/internal/container"
     "ecdisk/internal/cryptovault"
     "ecdisk/internal/mount"
@@ -248,7 +249,11 @@ func cmdMount(args []string) error {
     if err != nil {
         return err
     }
-    defer h.Close()
+    // Note: h is not closed here; the mount backend owns the lifetime.
+    // It will be flushed and closed on unmount.
+
+    // Wrap the container handle in a write-back cache.
+    wb := cache.New(h, *cacheExtents)
 
     backend := mount.DefaultBackend()
     err = backend.Mount(mount.Options{
@@ -256,11 +261,19 @@ func cmdMount(args []string) error {
         MountPoint:    strings.ToUpper(*mountPoint),
         IdleSeconds:   *idleSeconds,
         CacheExtents:  *cacheExtents,
+        Store:         wb,
+        DiskSizeBytes: h.Header.DiskSizeBytes,
+        ExtentSize:    h.Header.ExtentSize,
     })
     if errors.Is(err, mount.ErrBackendMissing) {
+        h.Close()
         return fmt.Errorf("password ok, but mount backend is not implemented in this build yet")
     }
-    return err
+    if err != nil {
+        h.Close()
+        return err
+    }
+    return nil
 }
 
 func cmdUnmount(args []string) error {
