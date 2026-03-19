@@ -69,7 +69,7 @@ func initSpdDLL() error {
 			procVersion = dll.NewProc("SpdVersion")
 			return
 		}
-		dllInitErr = fmt.Errorf("%w (install WinSpd from github.com/winfsp/winspd or WinFsp 2.0+)", ErrBackendMissing)
+		dllInitErr = fmt.Errorf("%w — install WinFsp 2.0+ from https://github.com/winfsp/winfsp/releases", ErrBackendMissing)
 	})
 	return dllInitErr
 }
@@ -398,11 +398,17 @@ func openWinSpd(params *spdStorageUnitParams) (*spdConn, error) {
 		return conn, nil
 	}
 
+	ver := detectWinSpdVersion()
+	hint := "install WinFsp 2.0+ from https://github.com/winfsp/winfsp/releases"
+	if strings.Contains(ver, "1.0") || strings.Contains(ver, "0x0001") {
+		hint = "WinSpd 1.0 is too old and no longer supported; " + hint
+	}
 	return nil, fmt.Errorf(
-		"WinSpd unavailable: handle API: %v; ioctl API: %v; detected %s — install WinSpd from github.com/winfsp/winspd or WinFsp 2.0+",
+		"WinSpd unavailable: handle API: %v; ioctl API: %v; detected %s — %s",
 		handleErr,
 		ioctlErr,
-		detectWinSpdVersion(),
+		ver,
+		hint,
 	)
 }
 
