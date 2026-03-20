@@ -82,6 +82,8 @@ The mount/unmount commands (`mount`, `unmount`, menu options 7/8) require a **Wi
 
 WinFsp alone (including WinFsp 2.1.25156 and its `winfsp-*.dll` files) is **not** sufficient for mounting because it does not export the SPD symbols needed by ecdisk.
 
+Also note that **DiskSpd is not WinSpd**. Installing the `Microsoft.DiskSpd` winget package gives you the DiskSpd storage benchmark (`diskspd.exe`), not the WinSpd block-device backend that ecdisk needs for mounting.
+
 The interactive menu still shows mount/unmount on Windows now, so you can enter the container path and receive the exact backend error instead of being blocked before the check runs.
 
 This build also adds:
