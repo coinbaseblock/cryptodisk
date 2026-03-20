@@ -107,7 +107,7 @@ This build also adds:
 
 - `backend-doctor` to print a step-by-step diagnostic of the current WinFsp / WinSpd state.
 - `repair-backend` to stop old services, remove stale registrations, optionally reinstall WinFsp from a local MSI (or a directory containing one), optionally redeploy WinSpd from a local extracted payload directory or WinSpd MSI, and print where the process failed if anything is still wrong.
-- Interactive menu option `9` (`Repair Mount Backend`) as a guided wrapper around the same repair flow.
+- Interactive menu option `10` (`Repair Mount Backend`) as a guided wrapper around the same repair flow.
 
 Example repair flow:
 

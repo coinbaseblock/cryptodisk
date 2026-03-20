@@ -58,3 +58,21 @@ func TestBuildWinSpdUnavailableHint(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildMissingWinSpdDriverHint(t *testing.T) {
+	got := buildMissingWinSpdDriverHint()
+
+	for _, want := range []string{
+		"WinSpd driver service not installed",
+		"repair-backend",
+		"future WinFsp release adds integrated SPD support",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("hint %q missing substring %q", got, want)
+		}
+	}
+
+	if strings.Contains(got, "upgrade to a WinFsp version with integrated SPD support") {
+		t.Fatalf("hint %q still implies integrated WinFsp SPD support already exists", got)
+	}
+}

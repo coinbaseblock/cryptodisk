@@ -619,11 +619,7 @@ func checkDriverServiceCompatibility() error {
 		}
 	}
 
-	return fmt.Errorf(
-		"WinSpd driver service not installed — the loaded SPD DLL is version 1.x " +
-			"and requires the WinSpd kernel driver, which is not present on this system; " +
-			"run 'ecdisk repair-backend' as Administrator to install it, " +
-			"or upgrade to a WinFsp version with integrated SPD support")
+	return fmt.Errorf(buildMissingWinSpdDriverHint())
 }
 
 func missingBackendHint() string {
