@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -55,6 +56,12 @@ var (
 	procIoctlProvision   *windows.LazyProc
 	procIoctlTransact    *windows.LazyProc
 	procIoctlUnprovision *windows.LazyProc
+
+	procStorageUnitCreate          *windows.LazyProc
+	procStorageUnitDelete          *windows.LazyProc
+	procStorageUnitShutdown        *windows.LazyProc
+	procStorageUnitStartDispatcher *windows.LazyProc
+	procStorageUnitWaitDispatcher  *windows.LazyProc
 
 	procVersion *windows.LazyProc
 
@@ -122,10 +129,12 @@ func initSpdDLL() error {
 			if err := dll.Load(); err != nil {
 				continue
 			}
-			// Check that at least one API set (Handle or IOCTL) is present.
+			// Check that at least one API set (Handle, IOCTL, or the public
+			// dispatcher API from standalone WinSpd 1.0) is present.
 			hOpen := dll.NewProc("SpdStorageUnitHandleOpen")
 			iOpen := dll.NewProc("SpdIoctlOpenDevice")
-			if hOpen.Find() != nil && iOpen.Find() != nil {
+			pCreate := dll.NewProc("SpdStorageUnitCreate")
+			if hOpen.Find() != nil && iOpen.Find() != nil && pCreate.Find() != nil {
 				continue // DLL exists but has no SPD exports
 			}
 			winSpdDLL = dll
@@ -136,6 +145,11 @@ func initSpdDLL() error {
 			procIoctlProvision = dll.NewProc("SpdIoctlProvision")
 			procIoctlTransact = dll.NewProc("SpdIoctlTransact")
 			procIoctlUnprovision = dll.NewProc("SpdIoctlUnprovision")
+			procStorageUnitCreate = dll.NewProc("SpdStorageUnitCreate")
+			procStorageUnitDelete = dll.NewProc("SpdStorageUnitDelete")
+			procStorageUnitShutdown = dll.NewProc("SpdStorageUnitShutdown")
+			procStorageUnitStartDispatcher = dll.NewProc("SpdStorageUnitStartDispatcher")
+			procStorageUnitWaitDispatcher = dll.NewProc("SpdStorageUnitWaitDispatcher")
 			procVersion = dll.NewProc("SpdVersion")
 			return
 		}
@@ -196,6 +210,12 @@ type spdUnitStatus struct {
 	StatusFlags uint32  // 28
 }
 
+type spdUnmapDescriptor struct {
+	BlockAddress uint64
+	BlockCount   uint32
+	_            uint32
+}
+
 // spdTransactRsp matches SPD_IOCTL_TRANSACT_RSP (48 bytes).
 type spdTransactRsp struct {
 	Hint   uint64        // 0
@@ -203,6 +223,26 @@ type spdTransactRsp struct {
 	_      [7]byte       // 9
 	Status spdUnitStatus // 16
 }
+
+type spdStorageUnit struct{}
+
+type spdStorageUnitInterface struct {
+	Read     uintptr
+	Write    uintptr
+	Flush    uintptr
+	Unmap    uintptr
+	Reserved [12]uintptr
+}
+
+var (
+	publicWinSpdInterface = spdStorageUnitInterface{
+		Read:  syscall.NewCallback(spdReadCallback),
+		Write: syscall.NewCallback(spdWriteCallback),
+		Flush: syscall.NewCallback(spdFlushCallback),
+		Unmap: syscall.NewCallback(spdUnmapCallback),
+	}
+	publicWinSpdSessions sync.Map
+)
 
 // ── DLL wrappers ────────────────────────────────────────────────
 
@@ -220,6 +260,155 @@ func (c *spdConn) close() error {
 		return nil
 	}
 	return c.closeFn()
+}
+
+type spdBackend interface {
+	start(*winspdSession) error
+	close(*winspdSession) error
+}
+
+type legacySpdBackend struct {
+	conn *spdConn
+}
+
+func (b *legacySpdBackend) start(sess *winspdSession) error {
+	sess.conn = b.conn
+	go sess.serve()
+	return nil
+}
+
+func (b *legacySpdBackend) close(sess *winspdSession) error {
+	if sess.conn == nil {
+		return nil
+	}
+	return sess.conn.close()
+}
+
+type publicSpdBackend struct {
+	unit *spdStorageUnit
+}
+
+func (b *publicSpdBackend) start(sess *winspdSession) error {
+	sess.unit = b.unit
+	publicWinSpdSessions.Store(uintptr(unsafe.Pointer(b.unit)), sess)
+	r, _, _ := procStorageUnitStartDispatcher.Call(
+		uintptr(unsafe.Pointer(b.unit)),
+		0,
+	)
+	if r != 0 {
+		publicWinSpdSessions.Delete(uintptr(unsafe.Pointer(b.unit)))
+		return fmt.Errorf("SpdStorageUnitStartDispatcher: %w", windows.Errno(r))
+	}
+	go func() {
+		procStorageUnitWaitDispatcher.Call(uintptr(unsafe.Pointer(b.unit)))
+		close(sess.done)
+	}()
+	return nil
+}
+
+func (b *publicSpdBackend) close(sess *winspdSession) error {
+	if b.unit == nil {
+		return nil
+	}
+	publicWinSpdSessions.Delete(uintptr(unsafe.Pointer(b.unit)))
+	procStorageUnitShutdown.Call(uintptr(unsafe.Pointer(b.unit)))
+	<-sess.done
+	procStorageUnitDelete.Call(uintptr(unsafe.Pointer(b.unit)))
+	return nil
+}
+
+func sessionForStorageUnit(ptr uintptr) (*winspdSession, bool) {
+	v, ok := publicWinSpdSessions.Load(ptr)
+	if !ok {
+		return nil, false
+	}
+	sess, ok := v.(*winspdSession)
+	return sess, ok
+}
+
+func spdReadCallback(storageUnit, buffer, blockAddress, blockCount, flushFlag, status uintptr) uintptr {
+	sess, ok := sessionForStorageUnit(storageUnit)
+	if !ok {
+		return 1
+	}
+	if sess.locker != nil {
+		sess.locker.Touch()
+	}
+	if flushFlag != 0 {
+		if err := sess.bd.Flush(); err != nil {
+			st := (*spdUnitStatus)(unsafe.Pointer(status))
+			st.ScsiStatus = 0x02
+			st.SenseKey = 0x04
+			return 1
+		}
+	}
+	length := int(uint32(blockCount)) * int(sess.bd.SectorSize())
+	buf := unsafe.Slice((*byte)(unsafe.Pointer(buffer)), length)
+	off := int64(blockAddress) * int64(sess.bd.SectorSize())
+	n, err := sess.bd.ReadAt(buf, off)
+	st := (*spdUnitStatus)(unsafe.Pointer(status))
+	if err != nil {
+		st.ScsiStatus = 0x02
+		st.SenseKey = 0x03
+		st.ASC = 0x11
+	}
+	st.Information = uint64(n)
+	return 1
+}
+
+func spdWriteCallback(storageUnit, buffer, blockAddress, blockCount, flushFlag, status uintptr) uintptr {
+	sess, ok := sessionForStorageUnit(storageUnit)
+	if !ok {
+		return 1
+	}
+	if sess.locker != nil {
+		sess.locker.Touch()
+	}
+	length := int(uint32(blockCount)) * int(sess.bd.SectorSize())
+	buf := unsafe.Slice((*byte)(unsafe.Pointer(buffer)), length)
+	off := int64(blockAddress) * int64(sess.bd.SectorSize())
+	n, err := sess.bd.WriteAt(buf, off)
+	st := (*spdUnitStatus)(unsafe.Pointer(status))
+	if err != nil {
+		st.ScsiStatus = 0x02
+		st.SenseKey = 0x03
+		st.ASC = 0x0C
+	} else if flushFlag != 0 {
+		if flushErr := sess.bd.Flush(); flushErr != nil {
+			st.ScsiStatus = 0x02
+			st.SenseKey = 0x04
+		}
+	}
+	st.Information = uint64(n)
+	return 1
+}
+
+func spdFlushCallback(storageUnit, blockAddress, blockCount, status uintptr) uintptr {
+	sess, ok := sessionForStorageUnit(storageUnit)
+	if !ok {
+		return 1
+	}
+	if sess.locker != nil {
+		sess.locker.Touch()
+	}
+	if err := sess.bd.Flush(); err != nil {
+		st := (*spdUnitStatus)(unsafe.Pointer(status))
+		st.ScsiStatus = 0x02
+		st.SenseKey = 0x04
+	}
+	return 1
+}
+
+func spdUnmapCallback(storageUnit, descriptors, count, status uintptr) uintptr {
+	sess, ok := sessionForStorageUnit(storageUnit)
+	if ok && sess.locker != nil {
+		sess.locker.Touch()
+	}
+	_ = storageUnit
+	_ = descriptors
+	_ = count
+	_ = status
+	return 1
 }
 
 // spdHandleOpen opens via the Handle API using the global procs.
@@ -333,6 +522,29 @@ func spdIoctlOpenWith(pOpen, pProv, pTransact, pUnprov *windows.LazyProc, params
 			return firstErr
 		},
 	}, nil
+}
+
+func spdPublicOpen(params *spdStorageUnitParams) (*publicSpdBackend, error) {
+	if err := availableProcSet(
+		procStorageUnitCreate,
+		procStorageUnitDelete,
+		procStorageUnitShutdown,
+		procStorageUnitStartDispatcher,
+		procStorageUnitWaitDispatcher,
+	); err != nil {
+		return nil, err
+	}
+	var unit *spdStorageUnit
+	r, _, _ := procStorageUnitCreate.Call(
+		0,
+		uintptr(unsafe.Pointer(params)),
+		uintptr(unsafe.Pointer(&publicWinSpdInterface)),
+		uintptr(unsafe.Pointer(&unit)),
+	)
+	if r != 0 {
+		return nil, fmt.Errorf("SpdStorageUnitCreate: %w", windows.Errno(r))
+	}
+	return &publicSpdBackend{unit: unit}, nil
 }
 
 func availableProcSet(procs ...*windows.LazyProc) error {
@@ -471,7 +683,7 @@ func ensureSpdDriverRunning() error {
 // other than the one selected by initSpdDLL. This handles the case where e.g.
 // winspd-x64.dll has IOCTL exports but the driver is broken, while
 // winfsp-x64.dll has working Handle API exports.
-func tryAlternateDLLs(params *spdStorageUnitParams) (*spdConn, error) {
+func tryAlternateDLLs(params *spdStorageUnitParams) (spdBackend, error) {
 	// Build the same expanded candidate list as initSpdDLL.
 	candidates := make([]string, 0, len(spdDLLCandidates)*3)
 	for _, name := range spdDLLCandidates {
@@ -504,7 +716,7 @@ func tryAlternateDLLs(params *spdStorageUnitParams) (*spdConn, error) {
 		hClose := dll.NewProc("SpdStorageUnitHandleClose")
 		if hOpen.Find() == nil && hTransact.Find() == nil && hClose.Find() == nil {
 			if conn, err := spdHandleOpenWith(hOpen, hTransact, hClose, params); err == nil {
-				return conn, nil
+				return &legacySpdBackend{conn: conn}, nil
 			}
 		}
 
@@ -515,15 +727,31 @@ func tryAlternateDLLs(params *spdStorageUnitParams) (*spdConn, error) {
 		iUnprov := dll.NewProc("SpdIoctlUnprovision")
 		if iOpen.Find() == nil && iProv.Find() == nil && iTrans.Find() == nil && iUnprov.Find() == nil {
 			if conn, err := spdIoctlOpenWith(iOpen, iProv, iTrans, iUnprov, params); err == nil {
-				return conn, nil
+				return &legacySpdBackend{conn: conn}, nil
+			}
+		}
+
+		pCreate := dll.NewProc("SpdStorageUnitCreate")
+		pDelete := dll.NewProc("SpdStorageUnitDelete")
+		pShutdown := dll.NewProc("SpdStorageUnitShutdown")
+		pStart := dll.NewProc("SpdStorageUnitStartDispatcher")
+		pWait := dll.NewProc("SpdStorageUnitWaitDispatcher")
+		if pCreate.Find() == nil && pDelete.Find() == nil && pShutdown.Find() == nil && pStart.Find() == nil && pWait.Find() == nil {
+			procStorageUnitCreate = pCreate
+			procStorageUnitDelete = pDelete
+			procStorageUnitShutdown = pShutdown
+			procStorageUnitStartDispatcher = pStart
+			procStorageUnitWaitDispatcher = pWait
+			if backend, err := spdPublicOpen(params); err == nil {
+				return backend, nil
 			}
 		}
 	}
 	return nil, fmt.Errorf("no alternate DLL available")
 }
 
-func openWinSpd(params *spdStorageUnitParams) (*spdConn, error) {
-	var handleErr, ioctlErr error
+func openWinSpd(params *spdStorageUnitParams) (spdBackend, error) {
+	var handleErr, ioctlErr, publicErr error
 
 	// Ensure backend services are running before attempting any API.
 	// Both the Handle API (WinFsp.Launcher) and IOCTL API (WinSpd driver)
@@ -534,7 +762,7 @@ func openWinSpd(params *spdStorageUnitParams) (*spdConn, error) {
 	if availableProcSet(procHandleOpen, procHandleTransact, procHandleClose) == nil {
 		conn, err := spdHandleOpen(params)
 		if err == nil {
-			return conn, nil
+			return &legacySpdBackend{conn: conn}, nil
 		}
 		handleErr = err
 	} else {
@@ -545,7 +773,7 @@ func openWinSpd(params *spdStorageUnitParams) (*spdConn, error) {
 	if availableProcSet(procIoctlOpenDevice, procIoctlProvision, procIoctlTransact, procIoctlUnprovision) == nil {
 		conn, err := spdIoctlOpen(params)
 		if err == nil {
-			return conn, nil
+			return &legacySpdBackend{conn: conn}, nil
 		}
 		ioctlErr = err
 
@@ -554,25 +782,32 @@ func openWinSpd(params *spdStorageUnitParams) (*spdConn, error) {
 		time.Sleep(2 * time.Second)
 		conn, err = spdIoctlOpen(params)
 		if err == nil {
-			return conn, nil
+			return &legacySpdBackend{conn: conn}, nil
 		}
 		ioctlErr = fmt.Errorf("%v (retried after wait)", err)
 	} else {
 		ioctlErr = availableProcSet(procIoctlOpenDevice, procIoctlProvision, procIoctlTransact, procIoctlUnprovision)
 	}
 
+	if backend, err := spdPublicOpen(params); err == nil {
+		return backend, nil
+	} else {
+		publicErr = err
+	}
+
 	// Both API paths failed with the primary DLL.
 	// Try alternate DLL candidates (e.g. winfsp-x64.dll when winspd-x64.dll failed).
-	if conn, err := tryAlternateDLLs(params); err == nil {
-		return conn, nil
+	if backend, err := tryAlternateDLLs(params); err == nil {
+		return backend, nil
 	}
 
 	ver := detectWinSpdVersion()
 	hint := buildWinSpdUnavailableHint(ver, detectDiskSpdPath())
 	return nil, fmt.Errorf(
-		"WinSpd unavailable: handle API: %v; ioctl API: %v; detected %s — %s",
+		"WinSpd unavailable: handle API: %v; ioctl API: %v; public API: %v; detected %s — %s",
 		handleErr,
 		ioctlErr,
+		publicErr,
 		ver,
 		hint,
 	)
@@ -581,7 +816,9 @@ func openWinSpd(params *spdStorageUnitParams) (*spdConn, error) {
 // ── Session ─────────────────────────────────────────────────────
 
 type winspdSession struct {
+	backend spdBackend
 	conn    *spdConn
+	unit    *spdStorageUnit
 	bd      *BlockDev
 	dataBuf []byte
 	locker  *autolock.Manager
@@ -672,9 +909,7 @@ func (s *winspdSession) shutdown() error {
 		s.locker.Stop()
 	}
 	s.bd.Flush()
-	closeErr := s.conn.close()
-	<-s.done
-	return closeErr
+	return s.backend.close(s)
 }
 
 // LockNow implements autolock.Locker.
@@ -711,13 +946,13 @@ func (b *WinSpdBridge) Mount(opts Options) error {
 	// Snapshot existing physical drives so we can detect the new one.
 	before := listPhysicalDrives()
 
-	conn, err := openWinSpd(&params)
+	backend, err := openWinSpd(&params)
 	if err != nil {
 		return err
 	}
 
 	sess := &winspdSession{
-		conn:    conn,
+		backend: backend,
 		bd:      bd,
 		dataBuf: make([]byte, maxTransferLen),
 		stop:    make(chan struct{}),
@@ -736,8 +971,12 @@ func (b *WinSpdBridge) Mount(opts Options) error {
 	b.mounts[opts.MountPoint] = sess
 	b.mu.Unlock()
 
-	// Start serving I/O requests in the background.
-	go sess.serve()
+	if err := sess.backend.start(sess); err != nil {
+		b.mu.Lock()
+		delete(b.mounts, opts.MountPoint)
+		b.mu.Unlock()
+		return err
+	}
 
 	// Best-effort: bring the new disk online and assign the requested drive letter.
 	if letter := parseDriveLetter(opts.MountPoint); letter != "" {
