@@ -78,11 +78,11 @@ The mount/unmount commands (`mount`, `unmount`, menu options 7/8) require a **Wi
 
 **However**, the standalone WinSpd project (<https://github.com/winfsp/winspd>) is **no longer actively maintained** and its release assets may be unavailable for download. This means mount/unmount functionality on Windows is **not currently usable** in a straightforward way.
 
-WinFsp alone (winfsp-x64.dll) is **not** sufficient for mounting because it does not export the SPD symbols needed by ecdisk.
+WinFsp alone (including WinFsp 2.1.25156 and its `winfsp-*.dll` files) is **not** sufficient for mounting because it does not export the SPD symbols needed by ecdisk.
 
 All other features (create, inspect, change password, recover, VHDX creation) work independently of WinSpd.
 
 **Possible future directions:**
-- A future WinFsp release may integrate SPD support — check <https://github.com/winfsp/winfsp/releases>
+- Track future WinFsp releases in case SPD support is added later: <https://github.com/winfsp/winfsp/releases>
 - An alternative approach could use WinFsp/go-winfsp to present the container as a file system rather than a block device
 - A helper daemon approach as described in `BACKEND_CONTRACT.md`

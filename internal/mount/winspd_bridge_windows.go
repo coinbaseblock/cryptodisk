@@ -367,6 +367,10 @@ func detectWinSpdVersion() string {
 	return fmt.Sprintf("version %d.%d (0x%08x)", major, minor, version)
 }
 
+func (b *WinSpdBridge) CheckAvailable() error {
+	return initSpdDLL()
+}
+
 func missingBackendHint() string {
 	// Check whether a winspd DLL exists but was renamed (e.g. .bak).
 	renamedHint := ""
@@ -385,20 +389,20 @@ func missingBackendHint() string {
 		return "WinFsp is installed but does not include block-device (SPD) support. " +
 			"The standalone WinSpd project (https://github.com/winfsp/winspd) is no longer actively maintained " +
 			"and its releases may be unavailable. " +
-			"Windows mount support in ecdisk requires a WinSpd-compatible driver which is currently not readily obtainable. " +
-			"Consider using WinFsp 2.0+ if it adds SPD support: https://github.com/winfsp/winfsp/releases"
+			"Windows mount support in ecdisk still requires a separate WinSpd-compatible driver, which is currently not readily obtainable. " +
+			"Track future WinFsp releases here in case SPD support is added later: https://github.com/winfsp/winfsp/releases"
 	}
 
 	if _, found := bundledWinFspDir(); found {
 		return "WinFsp runtime files were found nearby but WinFsp alone cannot expose a block device. " +
 			"The standalone WinSpd driver is no longer actively maintained and may be unavailable. " +
-			"Windows mount support requires a WinSpd-compatible driver. " +
-			"Consider using WinFsp 2.0+ if it adds SPD support: https://github.com/winfsp/winfsp/releases"
+			"Windows mount support still requires a WinSpd-compatible driver. " +
+			"Track future WinFsp releases here in case SPD support is added later: https://github.com/winfsp/winfsp/releases"
 	}
 
 	return "no block-device (SPD) driver found. " +
-		"Windows mount requires either WinSpd (no longer actively maintained; releases may be unavailable at " +
-		"https://github.com/winfsp/winspd) or a future WinFsp version with SPD support " +
+		"Windows mount currently requires either WinSpd (no longer actively maintained; releases may be unavailable at " +
+		"https://github.com/winfsp/winspd) or a future WinFsp version that eventually adds SPD support " +
 		"(https://github.com/winfsp/winfsp/releases)"
 }
 

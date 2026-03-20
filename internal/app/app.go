@@ -242,6 +242,10 @@ func cmdMount(args []string) error {
 		return errors.New("--container and --mount are required")
 	}
 	*mountPoint = mount.NormalizeMountPoint(*mountPoint)
+	backend := mount.DefaultBackend()
+	if err := mount.CheckAvailable(backend); err != nil {
+		return err
+	}
 	pw, err := prompt("password: ")
 	if err != nil {
 		return err
@@ -256,7 +260,6 @@ func cmdMount(args []string) error {
 	// Wrap the container handle in a write-back cache.
 	wb := cache.New(h, *cacheExtents)
 
-	backend := mount.DefaultBackend()
 	err = backend.Mount(mount.Options{
 		ContainerPath: *containerPath,
 		MountPoint:    *mountPoint,

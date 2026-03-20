@@ -20,6 +20,11 @@ func TestDefaultBackend_ReturnsBackend(t *testing.T) {
 	}
 }
 
+func TestCheckAvailable_DefaultBackend(t *testing.T) {
+	b := DefaultBackend()
+	_ = CheckAvailable(b)
+}
+
 func TestDefaultBackend_MountNilStore(t *testing.T) {
 	b := DefaultBackend()
 	err := b.Mount(Options{
