@@ -64,6 +64,9 @@ func newNBDBackend() *nbdBackend {
 }
 
 func (b *nbdBackend) CheckAvailable() error {
+	if _, err := exec.LookPath("nbd-client"); err != nil {
+		return fmt.Errorf("%w — nbd-client not found on PATH; install nbd-client (e.g. apt install nbd-client) and ensure the nbd kernel module is loaded (modprobe nbd)", ErrBackendMissing)
+	}
 	return nil
 }
 
@@ -77,33 +80,23 @@ func (b *nbdBackend) Mount(opts Options) error {
 
 	bd := NewBlockDev(opts.Store, opts.DiskSizeBytes, opts.ExtentSize)
 
-	// Create a Unix socket pair for the NBD kernel driver
-	fds, err := newSocketPair()
+	// Create a Unix socket pair for the NBD kernel driver.
+	// We need real Unix domain sockets (not net.Pipe) because nbd-client
+	// requires a kernel file descriptor it can hand to the NBD driver.
+	userConn, kernFile, err := newUnixSocketPair()
 	if err != nil {
 		return fmt.Errorf("socketpair: %w", err)
 	}
-	userConn := fds[0]
-	kernConn := fds[1]
 
 	dev := opts.MountPoint
 
-	// Configure the NBD device via nbd-client or ioctl
-	// For simplicity, we use the socket-based approach with nbd-client
-	kernFile, err := kernConn.(*net.UnixConn).File()
-	if err != nil {
-		userConn.Close()
-		kernConn.Close()
-		return fmt.Errorf("get kernel fd: %w", err)
-	}
-
 	cmd := exec.Command("nbd-client", "-b", "512",
 		"-s", fmt.Sprintf("%d", bd.DiskSizeBytes()/512),
-		"-u", kernFile.Name(),
+		"-u", fmt.Sprintf("/dev/fd/%d", 3),
 		dev)
 	cmd.ExtraFiles = []*os.File{kernFile}
 	if err := cmd.Start(); err != nil {
 		userConn.Close()
-		kernConn.Close()
 		kernFile.Close()
 		return fmt.Errorf("nbd-client: %w", err)
 	}
@@ -157,9 +150,6 @@ func (sess *nbdSession) serve() {
 
 		var req nbdRequest
 		if err := binary.Read(sess.conn, binary.BigEndian, &req); err != nil {
-			if err == io.EOF {
-				return
-			}
 			return
 		}
 		if req.Magic != nbdRequestMagic {
@@ -180,9 +170,13 @@ func (sess *nbdSession) serve() {
 			if _, err := sess.bd.ReadAt(buf, int64(req.Offset)); err != nil {
 				resp.Error = 5 // EIO
 			}
-			binary.Write(sess.conn, binary.BigEndian, resp)
-			if resp.Error == 0 {
-				sess.conn.Write(buf)
+			if err := binary.Write(sess.conn, binary.BigEndian, resp); err != nil {
+				return
+			}
+			// NBD protocol requires sending Length bytes after the response
+			// header for reads, regardless of error status.
+			if _, err := sess.conn.Write(buf); err != nil {
+				return
 			}
 
 		case nbdCmdWrite:
@@ -196,13 +190,17 @@ func (sess *nbdSession) serve() {
 			if _, err := sess.bd.WriteAt(buf, int64(req.Offset)); err != nil {
 				resp.Error = 5 // EIO
 			}
-			binary.Write(sess.conn, binary.BigEndian, resp)
+			if err := binary.Write(sess.conn, binary.BigEndian, resp); err != nil {
+				return
+			}
 
 		case nbdCmdFlush:
 			if err := sess.bd.Flush(); err != nil {
 				resp.Error = 5
 			}
-			binary.Write(sess.conn, binary.BigEndian, resp)
+			if err := binary.Write(sess.conn, binary.BigEndian, resp); err != nil {
+				return
+			}
 
 		case nbdCmdDisc:
 			sess.bd.Flush()
@@ -211,11 +209,15 @@ func (sess *nbdSession) serve() {
 
 		case nbdCmdTrim:
 			// No-op for encrypted containers
-			binary.Write(sess.conn, binary.BigEndian, resp)
+			if err := binary.Write(sess.conn, binary.BigEndian, resp); err != nil {
+				return
+			}
 
 		default:
 			resp.Error = 22 // EINVAL
-			binary.Write(sess.conn, binary.BigEndian, resp)
+			if err := binary.Write(sess.conn, binary.BigEndian, resp); err != nil {
+				return
+			}
 		}
 	}
 }
@@ -235,9 +237,4 @@ func (sess *nbdSession) shutdown() error {
 // LockNow implements autolock.Locker.
 func (sess *nbdSession) LockNow(reason string) error {
 	return sess.shutdown()
-}
-
-func newSocketPair() ([2]net.Conn, error) {
-	c1, c2 := net.Pipe()
-	return [2]net.Conn{c1, c2}, nil
 }
