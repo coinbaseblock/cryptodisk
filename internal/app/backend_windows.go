@@ -262,19 +262,26 @@ func collectBackendProbes() []backendProbe {
 	})
 
 	services := detectServiceStates([]string{"WinSpd", "WinSpd.Launcher", "WinFsp.Launcher"})
+	svcHealthy := hasHealthyBackendService(services)
+	svcFix := "start a backend service (sc start WinFsp.Launcher) or rerun repair-backend to reinstall; at least one service must be running"
+	if !svcHealthy {
+		if req := mount.RequiredDriverServices(); len(req) > 0 {
+			svcFix = fmt.Sprintf("the loaded SPD DLL requires service(s) %s; run 'ecdisk repair-backend' as Administrator to install the WinSpd driver", strings.Join(req, " or "))
+		}
+	}
 	probes = append(probes, backendProbe{
 		Name:   "Driver services",
-		OK:     hasHealthyBackendService(services),
+		OK:     svcHealthy,
 		Detail: renderServiceStates(services),
-		Fix:    "start a backend service (sc start WinFsp.Launcher) or rerun repair-backend to reinstall; at least one service must be running",
+		Fix:    svcFix,
 	})
 
 	openErr := diagnoseMountOpen()
 	probes = append(probes, backendProbe{
 		Name:   "Mount preflight",
 		OK:     openErr == nil,
-		Detail: valueOrFallback(errorString(openErr), "backend DLL/driver handshake succeeded"),
-		Fix:    "if the DLL exists but the handshake fails, remove stale services/files and redeploy matching DLL + driver bits from the same WinSpd package",
+		Detail: valueOrFallback(errorString(openErr), "backend DLL loaded and driver service available"),
+		Fix:    "if the DLL exists but the driver check fails, remove stale services/files and redeploy matching DLL + driver bits from the same WinSpd package",
 	})
 
 	diskSpdPath := detectDiskSpdInstall()
@@ -329,8 +336,20 @@ func renderServiceStates(states map[string]string) string {
 }
 
 func hasHealthyBackendService(states map[string]string) bool {
-	for _, state := range states {
-		if state == "running" || state == "start-pending" {
+	required := mount.RequiredDriverServices()
+	if len(required) == 0 {
+		// DLL not loaded yet — fall back to "any running service".
+		for _, state := range states {
+			if state == "running" || state == "start-pending" {
+				return true
+			}
+		}
+		return false
+	}
+	// Check that at least one of the *required* services is running or installed.
+	for _, name := range required {
+		s := states[name]
+		if s == "running" || s == "start-pending" {
 			return true
 		}
 	}

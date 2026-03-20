@@ -580,7 +580,50 @@ func detectWinSpdVersion() string {
 }
 
 func (b *WinSpdBridge) CheckAvailable() error {
-	return initSpdDLL()
+	if err := initSpdDLL(); err != nil {
+		return err
+	}
+	return checkDriverServiceCompatibility()
+}
+
+// RequiredDriverServices returns the list of Windows service names that the
+// loaded SPD DLL requires. Returns nil if the DLL has not been loaded yet.
+// The Handle API (WinSpd 2.0+) works through WinFsp.Launcher; the older
+// IOCTL and Public APIs require the standalone WinSpd kernel driver.
+func RequiredDriverServices() []string {
+	if winSpdDLL == nil {
+		return nil
+	}
+	if availableProcSet(procHandleOpen, procHandleTransact, procHandleClose) == nil {
+		return []string{"WinFsp.Launcher"}
+	}
+	return []string{"WinSpd", "WinSpd.Launcher"}
+}
+
+// checkDriverServiceCompatibility verifies that a driver service compatible
+// with the loaded DLL's API set is installed. The Handle API (WinSpd 2.0+ /
+// WinFsp 2.0+) works through WinFsp.Launcher; the older IOCTL and Public
+// Dispatcher APIs require the standalone WinSpd kernel driver service.
+func checkDriverServiceCompatibility() error {
+	hasHandleAPI := availableProcSet(procHandleOpen, procHandleTransact, procHandleClose) == nil
+	if hasHandleAPI {
+		// Handle API works through WinFsp.Launcher — the modern path.
+		return nil
+	}
+
+	// Older WinSpd 1.x DLL: IOCTL and Public APIs require the WinSpd
+	// kernel driver to be installed (the mount code will start it).
+	for _, name := range []string{"WinSpd", "WinSpd.Launcher"} {
+		if _, err := exec.Command("sc", "query", name).CombinedOutput(); err == nil {
+			return nil // service exists
+		}
+	}
+
+	return fmt.Errorf(
+		"WinSpd driver service not installed — the loaded SPD DLL is version 1.x " +
+			"and requires the WinSpd kernel driver, which is not present on this system; " +
+			"run 'ecdisk repair-backend' as Administrator to install it, " +
+			"or upgrade to a WinFsp version with integrated SPD support")
 }
 
 func missingBackendHint() string {
