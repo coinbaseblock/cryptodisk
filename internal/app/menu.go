@@ -63,6 +63,7 @@ var mainMenu = [][]menuEntry{
 	{
 		{"7", "Mount Container"},
 		{"8", "Unmount Container"},
+		{"9", "Repair Mount Backend"},
 	},
 }
 
@@ -81,6 +82,8 @@ func menuLabel(entry menuEntry) string {
 	switch entry.key {
 	case "7", "8":
 		return entry.label + mountMenuSuffix()
+	case "9":
+		return entry.label + backendRepairMenuSuffix()
 	default:
 		return entry.label
 	}
@@ -124,6 +127,8 @@ func interactiveMenu() {
 			menuMount()
 		case "8":
 			menuUnmount()
+		case "9":
+			menuBackendRepair()
 		case "0", "q", "Q":
 			fmt.Println()
 			return
@@ -313,6 +318,36 @@ func menuMount() {
 		errorMsg(err.Error())
 	} else {
 		successMsg("Container mounted!")
+	}
+}
+
+func menuBackendRepair() {
+	menuHeader("Repair Mount Backend")
+
+	if runtime.GOOS != "windows" {
+		errorMsg("Backend repair is only available on Windows")
+		return
+	}
+
+	winfspInstaller, _ := promptInput("WinFsp MSI path (optional): ")
+	winspdDir, _ := promptInput("WinSpd payload directory (optional): ")
+	scriptOut, _ := promptInput("Write PowerShell script to file (optional): ")
+
+	args := []string{}
+	if strings.TrimSpace(winfspInstaller) != "" {
+		args = append(args, "--winfsp-installer", winfspInstaller)
+	}
+	if strings.TrimSpace(winspdDir) != "" {
+		args = append(args, "--winspd-dir", winspdDir)
+	}
+	if strings.TrimSpace(scriptOut) != "" {
+		args = append(args, "--script-out", scriptOut)
+	}
+
+	if err := cmdRepairBackend(args); err != nil {
+		errorMsg(err.Error())
+	} else {
+		successMsg("Backend repair completed")
 	}
 }
 
