@@ -6,6 +6,8 @@ import (
 	"os"
 	"runtime"
 	"strings"
+
+	"ecdisk/internal/mount"
 )
 
 // ─── UI helpers ──────────────────────────────────────────────────────
@@ -59,18 +61,29 @@ var mainMenu = [][]menuEntry{
 		{"6", "Create Diff VHDX"},
 	},
 	{
-		{"7", "Mount Container" + mountMenuSuffix()},
-		{"8", "Unmount Container" + mountMenuSuffix()},
+		{"7", "Mount Container"},
+		{"8", "Unmount Container"},
 	},
 }
 
-// mountMenuSuffix returns a warning suffix for mount menu items on Windows,
-// where the WinSpd dependency is no longer readily available.
+// mountMenuSuffix returns an informational suffix for mount menu items on
+// Windows, where mount support depends on an external WinSpd-compatible
+// backend. The menu still exposes the actions so users can try mounting and
+// receive the concrete backend error from the runtime check.
 func mountMenuSuffix() string {
 	if runtime.GOOS == "windows" {
-		return " " + colorDim + "(Windows mount currently unavailable — see README)" + colorReset
+		return " " + colorDim + "(requires WinSpd-compatible backend)" + colorReset
 	}
 	return ""
+}
+
+func menuLabel(entry menuEntry) string {
+	switch entry.key {
+	case "7", "8":
+		return entry.label + mountMenuSuffix()
+	default:
+		return entry.label
+	}
 }
 
 func interactiveMenu() {
@@ -82,7 +95,7 @@ func interactiveMenu() {
 		for _, group := range mainMenu {
 			fmt.Println()
 			for _, item := range group {
-				fmt.Printf("    %s%s%s  %s\n", colorGreen, item.key, colorReset, item.label)
+				fmt.Printf("    %s%s%s  %s\n", colorGreen, item.key, colorReset, menuLabel(item))
 			}
 		}
 		fmt.Printf("\n    %s0%s  Exit\n", colorDim, colorReset)
@@ -265,10 +278,12 @@ func menuMount() {
 	menuHeader("Mount Container")
 
 	if runtime.GOOS == "windows" {
-		fmt.Printf("  %sWarning:%s Windows mount is currently unavailable because it still\n", colorRed, colorReset)
-		fmt.Printf("  depends on a WinSpd-compatible block-device driver. WinFsp alone is\n")
-		fmt.Printf("  not enough. See README.md for details and alternatives.\n\n")
-		return
+		if err := mount.CheckAvailable(mount.DefaultBackend()); err != nil {
+			fmt.Printf("  %sNote:%s Windows mount still depends on a WinSpd-compatible\n", colorDim, colorReset)
+			fmt.Printf("  backend. This menu will still let you try the mount so you can see\n")
+			fmt.Printf("  the exact runtime error if the backend is missing or incompatible.\n")
+			fmt.Printf("  Current check: %v\n\n", err)
+		}
 	}
 
 	path, err := promptInput("Container file path: ")
@@ -305,10 +320,12 @@ func menuUnmount() {
 	menuHeader("Unmount Container")
 
 	if runtime.GOOS == "windows" {
-		fmt.Printf("  %sWarning:%s Windows unmount is currently unavailable for the same\n", colorRed, colorReset)
-		fmt.Printf("  reason as mount: ecdisk still depends on a WinSpd-compatible\n")
-		fmt.Printf("  block-device driver. See README.md for details and alternatives.\n\n")
-		return
+		if err := mount.CheckAvailable(mount.DefaultBackend()); err != nil {
+			fmt.Printf("  %sNote:%s Windows unmount still depends on the same backend used by\n", colorDim, colorReset)
+			fmt.Printf("  mount. This menu remains available so you can try it and get the\n")
+			fmt.Printf("  exact runtime error instead of being blocked up front.\n")
+			fmt.Printf("  Current check: %v\n\n", err)
+		}
 	}
 
 	mountPoint, err := promptInput("Mount point (e.g. X:): ")

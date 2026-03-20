@@ -72,13 +72,15 @@ This prototype currently includes:
 - encrypted extent read/write primitives
 - VHDX create / differencing wrappers via `go-winio`
 
-### Mount/Unmount on Windows (currently unavailable)
+### Mount/Unmount on Windows (backend-dependent)
 
 The mount/unmount commands (`mount`, `unmount`, menu options 7/8) require a **WinSpd** (Storage Proxy Driver) compatible kernel driver and DLL. WinSpd was a separate project from WinFsp — WinFsp handles file systems while WinSpd handles block devices.
 
-**However**, the standalone WinSpd project (<https://github.com/winfsp/winspd>) is **no longer actively maintained** and its release assets may be unavailable for download. This means mount/unmount functionality on Windows is **not currently usable** in a straightforward way.
+**However**, the standalone WinSpd project (<https://github.com/winfsp/winspd>) is **no longer actively maintained** and its release assets may be unavailable for download. Because of that, Windows mount/unmount remains **backend-dependent** and may fail at runtime unless a compatible WinSpd-style driver and DLL are present.
 
 WinFsp alone (including WinFsp 2.1.25156 and its `winfsp-*.dll` files) is **not** sufficient for mounting because it does not export the SPD symbols needed by ecdisk.
+
+The interactive menu still shows mount/unmount on Windows now, so you can enter the container path and receive the exact backend error instead of being blocked before the check runs.
 
 All other features (create, inspect, change password, recover, VHDX creation) work independently of WinSpd.
 
