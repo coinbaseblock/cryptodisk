@@ -268,6 +268,7 @@ func menuMount() {
 		fmt.Printf("  %sWarning:%s Windows mount is currently unavailable because it still\n", colorRed, colorReset)
 		fmt.Printf("  depends on a WinSpd-compatible block-device driver. WinFsp alone is\n")
 		fmt.Printf("  not enough. See README.md for details and alternatives.\n\n")
+		return
 	}
 
 	path, err := promptInput("Container file path: ")
@@ -302,6 +303,13 @@ func menuMount() {
 
 func menuUnmount() {
 	menuHeader("Unmount Container")
+
+	if runtime.GOOS == "windows" {
+		fmt.Printf("  %sWarning:%s Windows unmount is currently unavailable for the same\n", colorRed, colorReset)
+		fmt.Printf("  reason as mount: ecdisk still depends on a WinSpd-compatible\n")
+		fmt.Printf("  block-device driver. See README.md for details and alternatives.\n\n")
+		return
+	}
 
 	mountPoint, err := promptInput("Mount point (e.g. X:): ")
 	if err != nil || mountPoint == "" {
