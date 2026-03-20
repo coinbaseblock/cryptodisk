@@ -76,7 +76,7 @@ func cmdBackendDoctor(args []string) error {
 
 func cmdRepairBackend(args []string) error {
 	fs := flag.NewFlagSet("repair-backend", flag.ContinueOnError)
-	winfspInstaller := fs.String("winfsp-installer", "", "path to WinFsp MSI installer")
+	winfspInstaller := fs.String("winfsp-installer", "", "path to a WinFsp MSI installer or a directory containing one")
 	winspdDir := fs.String("winspd-dir", "", "path to extracted WinSpd payload directory")
 	scriptOut := fs.String("script-out", "", "optional path to save a PowerShell repair script")
 	dryRun := fs.Bool("dry-run", false, "print checks only; do not modify the system")
@@ -504,13 +504,54 @@ func deleteBackendServices() error {
 }
 
 func installWinFsp(installer string) error {
-	if strings.TrimSpace(installer) == "" {
-		return errors.New("WinFsp installer path is empty")
+	resolved, err := resolveWinFspInstaller(installer)
+	if err != nil {
+		return err
 	}
-	if _, err := os.Stat(installer); err != nil {
-		return fmt.Errorf("WinFsp installer not found: %w", err)
+	return runCmd("msiexec.exe", "/i", resolved, "/qn", "/norestart")
+}
+
+func resolveWinFspInstaller(installer string) (string, error) {
+	installer = strings.TrimSpace(installer)
+	if installer == "" {
+		return "", errors.New("WinFsp installer path is empty")
 	}
-	return runCmd("msiexec.exe", "/i", installer, "/qn", "/norestart")
+
+	info, err := os.Stat(installer)
+	if err != nil {
+		return "", fmt.Errorf("WinFsp installer not found: %w", err)
+	}
+
+	if !info.IsDir() {
+		if strings.EqualFold(filepath.Ext(installer), ".msi") {
+			return installer, nil
+		}
+		return "", fmt.Errorf("WinFsp installer must be an .msi file or a directory containing one: %s", installer)
+	}
+
+	matches, err := filepath.Glob(filepath.Join(installer, "winfsp-*.msi"))
+	if err != nil {
+		return "", fmt.Errorf("search WinFsp installer: %w", err)
+	}
+	if len(matches) == 0 {
+		matches, err = filepath.Glob(filepath.Join(installer, "*.msi"))
+		if err != nil {
+			return "", fmt.Errorf("search WinFsp installer: %w", err)
+		}
+	}
+	if len(matches) == 0 {
+		return "", fmt.Errorf("no WinFsp MSI found in directory: %s", installer)
+	}
+	if len(matches) > 1 {
+		sort.Strings(matches)
+		for _, match := range matches {
+			if strings.Contains(strings.ToLower(filepath.Base(match)), "winfsp") {
+				return match, nil
+			}
+		}
+		return "", fmt.Errorf("multiple MSI files found in %s; pass the exact WinFsp MSI path", installer)
+	}
+	return matches[0], nil
 }
 
 func discoverWinSpdArtifacts(root string) (backendArtifacts, error) {
