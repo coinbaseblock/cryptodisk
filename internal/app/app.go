@@ -96,7 +96,7 @@ Commands:
 
   repair-backend
             Clean old WinFsp/WinSpd state and reinstall from local payloads (Windows)
-            [--winfsp-installer FILE] [--winspd-dir DIR] [--script-out FILE] [--dry-run]
+            [--winfsp-installer FILE] [--winspd-dir PATH] [--script-out FILE] [--dry-run]
 
   menu      Launch interactive menu
   help      Show this help message`)
