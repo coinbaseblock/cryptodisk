@@ -21,6 +21,7 @@ import (
 type backendProbe struct {
 	Name   string
 	OK     bool
+	Warn   bool
 	Detail string
 	Fix    string
 }
@@ -53,10 +54,15 @@ func cmdBackendDoctor(args []string) error {
 	fmt.Println()
 
 	issues := 0
+	warnings := 0
 	for _, probe := range report {
 		status := "OK"
 		prefix := "[OK]"
-		if !probe.OK {
+		if probe.Warn {
+			status = "WARNING"
+			prefix = "[--]"
+			warnings++
+		} else if !probe.OK {
 			status = "ISSUE"
 			prefix = "[!!]"
 			issues++
@@ -72,7 +78,11 @@ func cmdBackendDoctor(args []string) error {
 	}
 
 	if issues == 0 {
-		fmt.Println("Backend status: ready for a mount attempt.")
+		if warnings == 0 {
+			fmt.Println("Backend status: ready for a mount attempt.")
+		} else {
+			fmt.Printf("Backend status: ready for a mount attempt with %d warning(s).\n", warnings)
+		}
 		return nil
 	}
 
@@ -229,7 +239,8 @@ func collectBackendProbes() []backendProbe {
 
 	probes = append(probes, backendProbe{
 		Name:   "Current user",
-		OK:     isRunningAsAdmin(),
+		OK:     true,
+		Warn:   !isRunningAsAdmin(),
 		Detail: adminDetail(),
 		Fix:    "run Command Prompt as Administrator before repairing drivers or services",
 	})
