@@ -4,6 +4,10 @@ package app
 
 import "errors"
 
+func backendDoctorMenuSuffix() string {
+	return ""
+}
+
 func backendRepairMenuSuffix() string {
 	return ""
 }

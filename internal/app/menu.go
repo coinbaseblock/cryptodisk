@@ -63,7 +63,8 @@ var mainMenu = [][]menuEntry{
 	{
 		{"7", "Mount Container"},
 		{"8", "Unmount Container"},
-		{"9", "Repair Mount Backend"},
+		{"9", "Backend Doctor"},
+		{"10", "Repair Mount Backend"},
 	},
 }
 
@@ -83,6 +84,8 @@ func menuLabel(entry menuEntry) string {
 	case "7", "8":
 		return entry.label + mountMenuSuffix()
 	case "9":
+		return entry.label + backendDoctorMenuSuffix()
+	case "10":
 		return entry.label + backendRepairMenuSuffix()
 	default:
 		return entry.label
@@ -128,6 +131,8 @@ func interactiveMenu() {
 		case "8":
 			menuUnmount()
 		case "9":
+			menuBackendDoctor()
+		case "10":
 			menuBackendRepair()
 		case "0", "q", "Q":
 			fmt.Println()
@@ -318,6 +323,20 @@ func menuMount() {
 		errorMsg(err.Error())
 	} else {
 		successMsg("Container mounted!")
+	}
+}
+
+func menuBackendDoctor() {
+	menuHeader("Backend Doctor")
+
+	if runtime.GOOS != "windows" {
+		errorMsg("Backend diagnostics are only available on Windows")
+		return
+	}
+
+	fmt.Println()
+	if err := cmdBackendDoctor([]string{}); err != nil {
+		errorMsg(err.Error())
 	}
 }
 
