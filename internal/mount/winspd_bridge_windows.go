@@ -1131,9 +1131,26 @@ if ($d.PartitionStyle -eq 'RAW') {
     }
 }`, diskNum, letter)
 
-	cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	// Retry up to 3 times with back-off; the disk may need a moment to
+	// become ready for partition operations after appearing.
+	var lastErr error
+	for retry := 0; retry < 3; retry++ {
+		if retry > 0 {
+			time.Sleep(time.Duration(retry) * 2 * time.Second)
+		}
+		cmd := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command", script)
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			return nil
+		}
+		detail := strings.TrimSpace(string(out))
+		if detail != "" {
+			lastErr = fmt.Errorf("%v: %s", err, detail)
+		} else {
+			lastErr = err
+		}
+	}
+	return lastErr
 }
 
 // offlineDisk takes the volume offline before WinSpd device removal.
