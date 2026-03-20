@@ -262,7 +262,23 @@ func collectBackendProbes() []backendProbe {
 		Fix:    "if the DLL exists but the handshake fails, remove stale services/files and redeploy matching DLL + driver bits from the same WinSpd package",
 	})
 
+	diskSpdPath := detectDiskSpdInstall()
+	probes = append(probes, backendProbe{
+		Name:   "DiskSpd package confusion",
+		OK:     !(openErr != nil && diskSpdPath != ""),
+		Detail: valueOrFallback(diskSpdPath, "diskspd.exe not found on PATH"),
+		Fix:    "Microsoft.DiskSpd is the DiskSpd benchmark tool, not the WinSpd backend; do not use winget install Microsoft.DiskSpd as a substitute for WinSpd",
+	})
+
 	return probes
+}
+
+func detectDiskSpdInstall() string {
+	path, err := exec.LookPath("diskspd.exe")
+	if err != nil {
+		return ""
+	}
+	return path
 }
 
 func detectServiceStates(names []string) map[string]string {

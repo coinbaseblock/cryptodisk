@@ -372,6 +372,12 @@ func (b *WinSpdBridge) CheckAvailable() error {
 }
 
 func missingBackendHint() string {
+	if diskSpdPath := detectDiskSpdPath(); diskSpdPath != "" {
+		return "Microsoft.DiskSpd was found on PATH, but DiskSpd is a storage benchmark and does not install the WinSpd backend required by ecdisk. " +
+			"Windows mount support still needs a WinSpd-compatible driver and DLL. " +
+			"Track future WinFsp releases here in case SPD support is added later: https://github.com/winfsp/winfsp/releases"
+	}
+
 	// Check whether a winspd DLL exists but was renamed (e.g. .bak).
 	renamedHint := ""
 	if exePath, err := os.Executable(); err == nil {
@@ -404,6 +410,14 @@ func missingBackendHint() string {
 		"Windows mount currently requires either WinSpd (no longer actively maintained; releases may be unavailable at " +
 		"https://github.com/winfsp/winspd) or a future WinFsp version that eventually adds SPD support " +
 		"(https://github.com/winfsp/winfsp/releases)"
+}
+
+func detectDiskSpdPath() string {
+	path, err := exec.LookPath("diskspd.exe")
+	if err != nil {
+		return ""
+	}
+	return path
 }
 
 func bundledWinFspDir() (string, bool) {
@@ -554,13 +568,7 @@ func openWinSpd(params *spdStorageUnitParams) (*spdConn, error) {
 	}
 
 	ver := detectWinSpdVersion()
-	hint := "ensure the WinSpd/WinFsp.Launcher service is running (try: sc start WinFsp.Launcher), " +
-		"or run 'ecdisk repair-backend' as Administrator; " +
-		"see https://github.com/winfsp/winfsp/releases for WinFsp updates"
-	if strings.Contains(ver, "1.0") || strings.Contains(ver, "0x0001") {
-		hint = "standalone WinSpd 1.0 detected — the IOCTL driver device may not be " +
-			"responding; try rebooting or reinstalling with 'ecdisk repair-backend'; " + hint
-	}
+	hint := buildWinSpdUnavailableHint(ver, detectDiskSpdPath())
 	return nil, fmt.Errorf(
 		"WinSpd unavailable: handle API: %v; ioctl API: %v; detected %s — %s",
 		handleErr,
