@@ -745,7 +745,18 @@ func copyFile(src, dst string) error {
 	defer in.Close()
 	out, err := os.Create(dst)
 	if err != nil {
-		return err
+		// On Windows a loaded DLL can be renamed even though it cannot be
+		// overwritten.  Move the locked file aside and try again.
+		old := dst + ".old"
+		os.Remove(old) // best-effort cleanup of a previous .old
+		if renameErr := os.Rename(dst, old); renameErr != nil {
+			return fmt.Errorf("%w (also failed to rename locked file: %v)", err, renameErr)
+		}
+		out, err = os.Create(dst)
+		if err != nil {
+			os.Rename(old, dst) // try to restore
+			return err
+		}
 	}
 	defer out.Close()
 	if _, err := out.ReadFrom(in); err != nil {
