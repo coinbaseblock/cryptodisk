@@ -41,6 +41,10 @@ func Main() {
 		err = cmdMount(os.Args[2:])
 	case "unmount":
 		err = cmdUnmount(os.Args[2:])
+	case "backend-doctor":
+		err = cmdBackendDoctor(os.Args[2:])
+	case "repair-backend":
+		err = cmdRepairBackend(os.Args[2:])
 	case "help", "--help", "-h":
 		usage()
 		return
@@ -86,6 +90,13 @@ Commands:
 
   unmount   Unmount a virtual drive
             --mount X:
+
+  backend-doctor
+            Diagnose WinFsp/WinSpd mount backend availability (Windows)
+
+  repair-backend
+            Clean old WinFsp/WinSpd state and reinstall from local payloads (Windows)
+            [--winfsp-installer FILE] [--winspd-dir DIR] [--script-out FILE] [--dry-run]
 
   menu      Launch interactive menu
   help      Show this help message`)

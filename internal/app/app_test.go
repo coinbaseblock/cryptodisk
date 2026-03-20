@@ -48,7 +48,7 @@ func TestMainMenu_Entries(t *testing.T) {
 
 func TestMenuEntry_AllKeysPresent(t *testing.T) {
 	// Verify expected menu keys 1-8 are all present.
-	expected := []string{"1", "2", "3", "4", "5", "6", "7", "8"}
+	expected := []string{"1", "2", "3", "4", "5", "6", "7", "8", "9"}
 	keys := map[string]bool{}
 	for _, group := range mainMenu {
 		for _, e := range group {
