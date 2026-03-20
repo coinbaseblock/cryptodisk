@@ -15,3 +15,10 @@ func buildWinSpdUnavailableHint(version, diskSpdPath string) string {
 	}
 	return hint
 }
+
+func buildMissingWinSpdDriverHint() string {
+	return "WinSpd driver service not installed — the loaded SPD DLL is version 1.x " +
+		"and requires the WinSpd kernel driver, which is not present on this system; " +
+		"run 'ecdisk repair-backend' as Administrator to install it, " +
+		"or, if a future WinFsp release adds integrated SPD support, upgrade both the DLL and driver together"
+}
