@@ -4,8 +4,8 @@ Go-first prototype for a custom encrypted disk container with a VHDX helper laye
 
 ## What changed in this build
 
-- `go build .` now works from the project root because the root now has a `main.go`.
-- There is still a second entrypoint at `cmd/ecdisk/main.go`, but it is only a thin wrapper.
+- The canonical CLI entrypoint is `cmd/ecdisk/main.go`, so the recommended build command is `go build -o ecdisk.exe ./cmd/ecdisk`.
+- The repository root still has a thin `main.go` convenience wrapper, but building the explicit `./cmd/ecdisk` package is more robust if your checkout contains extra stray `.go` files.
 - Usage examples are plain executable invocations only. No `.sh`, `.cmd`, or PowerShell scripts are required.
 - The current build is still **pure Go for the CLI/control plane**, but the actual custom block-device mount backend is **not implemented yet** in this prototype.
 
@@ -13,8 +13,25 @@ Go-first prototype for a custom encrypted disk container with a VHDX helper laye
 
 ```text
 go mod tidy
-go build -o ecdisk.exe .
+go build -o ecdisk.exe ./cmd/ecdisk
 ```
+
+
+## Build troubleshooting
+
+If Windows reports an error like:
+
+```text
+found packages main (main.go) and mount (winspd_bridge_windows.go) in C:\system\cryptodisk
+```
+
+then your working tree has a misplaced `winspd_bridge_windows.go` file at the repository root. In this repo that file belongs under `internal/mount/`, not next to `main.go`. The fastest workaround is to build the explicit CLI package instead of the repo root:
+
+```text
+go build -o ecdisk.exe ./cmd/ecdisk
+```
+
+If the misplaced file is part of your checkout, move or delete the stray root-level copy and restore the normal directory structure before rebuilding.
 
 ## CLI usage
 
