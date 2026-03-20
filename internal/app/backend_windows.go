@@ -33,6 +33,10 @@ type backendArtifacts struct {
 	DLLs        []string
 }
 
+func backendDoctorMenuSuffix() string {
+	return " " + colorDim + "(WinFsp/WinSpd diagnostics)" + colorReset
+}
+
 func backendRepairMenuSuffix() string {
 	return " " + colorDim + "(WinFsp/WinSpd reset)" + colorReset
 }
