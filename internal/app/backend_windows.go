@@ -167,6 +167,11 @@ func cmdRepairBackend(args []string) error {
 		fmt.Println()
 	}
 
+	if err := step("Start backend services", startKnownBackendServices); err != nil {
+		fmt.Println("continuing; services will start on next reboot or mount attempt")
+		fmt.Println()
+	}
+
 	if err := step("Final diagnostic", func() error {
 		return printBackendDoctorResult(true)
 	}); err != nil {
@@ -245,7 +250,7 @@ func collectBackendProbes() []backendProbe {
 		Name:   "Driver services",
 		OK:     hasHealthyBackendService(services),
 		Detail: renderServiceStates(services),
-		Fix:    "repair or reinstall the backend so at least WinSpd or a compatible launcher service is installed and running",
+		Fix:    "start a backend service (sc start WinFsp.Launcher) or rerun repair-backend to reinstall; at least one service must be running",
 	})
 
 	openErr := diagnoseMountOpen()
@@ -293,7 +298,7 @@ func renderServiceStates(states map[string]string) string {
 
 func hasHealthyBackendService(states map[string]string) bool {
 	for _, state := range states {
-		if state == "running" || state == "stopped" || state == "start-pending" {
+		if state == "running" || state == "start-pending" {
 			return true
 		}
 	}
@@ -421,6 +426,34 @@ func stopKnownBackendServices() error {
 		}
 		if text != "" {
 			fmt.Println(indent(text, "       "))
+		}
+	}
+	return firstErr
+}
+
+func startKnownBackendServices() error {
+	var firstErr error
+	for _, name := range []string{"WinFsp.Launcher", "WinSpd", "WinSpd.Launcher"} {
+		out, err := exec.Command("sc", "query", name).CombinedOutput()
+		text := string(out)
+		if err != nil {
+			continue // service not installed
+		}
+		if strings.Contains(text, "RUNNING") {
+			fmt.Printf("       %s already running\n", name)
+			continue
+		}
+		startOut, startErr := exec.Command("sc", "start", name).CombinedOutput()
+		startText := strings.TrimSpace(string(startOut))
+		if startErr != nil {
+			if !strings.Contains(strings.ToLower(startText), "already been started") {
+				if firstErr == nil {
+					firstErr = fmt.Errorf("start %s: %v\n%s", name, startErr, startText)
+				}
+			}
+		}
+		if startText != "" {
+			fmt.Println(indent(startText, "       "))
 		}
 	}
 	return firstErr

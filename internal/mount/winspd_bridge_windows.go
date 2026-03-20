@@ -511,6 +511,11 @@ func tryAlternateDLLs(params *spdStorageUnitParams) (*spdConn, error) {
 func openWinSpd(params *spdStorageUnitParams) (*spdConn, error) {
 	var handleErr, ioctlErr error
 
+	// Ensure backend services are running before attempting any API.
+	// Both the Handle API (WinFsp.Launcher) and IOCTL API (WinSpd driver)
+	// require their respective services to be started.
+	_ = ensureSpdDriverRunning()
+
 	// Try Handle API (new WinSpd / WinFsp 2.0+).
 	if availableProcSet(procHandleOpen, procHandleTransact, procHandleClose) == nil {
 		conn, err := spdHandleOpen(params)
@@ -530,15 +535,14 @@ func openWinSpd(params *spdStorageUnitParams) (*spdConn, error) {
 		}
 		ioctlErr = err
 
-		// IOCTL device open failed — the driver service may not be running.
-		// Try to start it and retry once.
-		if svcErr := ensureSpdDriverRunning(); svcErr == nil {
-			conn, err = spdIoctlOpen(params)
-			if err == nil {
-				return conn, nil
-			}
-			ioctlErr = fmt.Errorf("%v (retried after starting service)", err)
+		// IOCTL device open failed — the driver service may not have
+		// finished initializing. Wait and retry once.
+		time.Sleep(2 * time.Second)
+		conn, err = spdIoctlOpen(params)
+		if err == nil {
+			return conn, nil
 		}
+		ioctlErr = fmt.Errorf("%v (retried after wait)", err)
 	} else {
 		ioctlErr = availableProcSet(procIoctlOpenDevice, procIoctlProvision, procIoctlTransact, procIoctlUnprovision)
 	}
@@ -550,9 +554,12 @@ func openWinSpd(params *spdStorageUnitParams) (*spdConn, error) {
 	}
 
 	ver := detectWinSpdVersion()
-	hint := "install WinFsp 2.0+ from https://github.com/winfsp/winfsp/releases"
+	hint := "ensure the WinSpd/WinFsp.Launcher service is running (try: sc start WinFsp.Launcher), " +
+		"or run 'ecdisk repair-backend' as Administrator; " +
+		"see https://github.com/winfsp/winfsp/releases for WinFsp updates"
 	if strings.Contains(ver, "1.0") || strings.Contains(ver, "0x0001") {
-		hint = "WinSpd 1.0 is too old and no longer supported; " + hint
+		hint = "standalone WinSpd 1.0 detected — the IOCTL driver device may not be " +
+			"responding; try rebooting or reinstalling with 'ecdisk repair-backend'; " + hint
 	}
 	return nil, fmt.Errorf(
 		"WinSpd unavailable: handle API: %v; ioctl API: %v; detected %s — %s",
