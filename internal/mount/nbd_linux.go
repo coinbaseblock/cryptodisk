@@ -45,8 +45,8 @@ type nbdResponse struct {
 
 // nbdBackend exposes an encrypted container as a Linux block device via NBD.
 type nbdBackend struct {
-	mu      sync.Mutex
-	mounts  map[string]*nbdSession
+	mu     sync.Mutex
+	mounts map[string]*nbdSession
 }
 
 type nbdSession struct {
@@ -61,6 +61,10 @@ func newNBDBackend() *nbdBackend {
 	return &nbdBackend{
 		mounts: make(map[string]*nbdSession),
 	}
+}
+
+func (b *nbdBackend) CheckAvailable() error {
+	return nil
 }
 
 func (b *nbdBackend) Mount(opts Options) error {

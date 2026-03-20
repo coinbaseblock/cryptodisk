@@ -42,6 +42,23 @@ type Backend interface {
 	Unmount(mountPoint string) error
 }
 
+// AvailabilityChecker is optionally implemented by backends that can
+// preflight whether mounting is usable before the CLI asks for secrets.
+type AvailabilityChecker interface {
+	CheckAvailable() error
+}
+
+// CheckAvailable asks the backend whether mount support is usable in the
+// current environment. Backends that do not implement AvailabilityChecker are
+// treated as available so existing backends remain compatible.
+func CheckAvailable(backend Backend) error {
+	checker, ok := backend.(AvailabilityChecker)
+	if !ok {
+		return nil
+	}
+	return checker.CheckAvailable()
+}
+
 // NormalizeMountPoint canonicalizes a user-supplied mount target.
 // Drive-letter mount points such as "x", "x:", "x:\", and " x:/ "
 // are normalized to "X:" so both CLI and backend logic treat them

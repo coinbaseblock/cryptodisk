@@ -68,7 +68,7 @@ var mainMenu = [][]menuEntry{
 // where the WinSpd dependency is no longer readily available.
 func mountMenuSuffix() string {
 	if runtime.GOOS == "windows" {
-		return " " + colorDim + "(WinSpd required — see README)" + colorReset
+		return " " + colorDim + "(Windows mount currently unavailable — see README)" + colorReset
 	}
 	return ""
 }
@@ -265,9 +265,9 @@ func menuMount() {
 	menuHeader("Mount Container")
 
 	if runtime.GOOS == "windows" {
-		fmt.Printf("  %sWarning:%s The WinSpd driver required for Windows mount is no longer\n", colorRed, colorReset)
-		fmt.Printf("  actively maintained and may not be available for download.\n")
-		fmt.Printf("  See README.md for details and alternatives.\n\n")
+		fmt.Printf("  %sWarning:%s Windows mount is currently unavailable because it still\n", colorRed, colorReset)
+		fmt.Printf("  depends on a WinSpd-compatible block-device driver. WinFsp alone is\n")
+		fmt.Printf("  not enough. See README.md for details and alternatives.\n\n")
 	}
 
 	path, err := promptInput("Container file path: ")
