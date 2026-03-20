@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"ecdisk/internal/mount"
 )
@@ -767,7 +768,20 @@ func reinstallWinSpdDriver(art backendArtifacts) error {
 	if err := runCmd(art.DevSetupExe, "remove", art.HardwareID); err != nil {
 		fmt.Println("       remove returned error; continuing with add in case driver was already absent")
 	}
-	return runCmd(art.DevSetupExe, "add", art.HardwareID, art.InfFile)
+	const maxAttempts = 6
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		err := runCmd(art.DevSetupExe, "add", art.HardwareID, art.InfFile)
+		if err == nil {
+			return nil
+		}
+		if !isRetryableDriverReinstallError(err) || attempt == maxAttempts {
+			return err
+		}
+		wait := time.Duration(attempt) * time.Second
+		fmt.Printf("       driver install is waiting for the previous device/service deletion to finish; retrying in %s\n", wait)
+		time.Sleep(wait)
+	}
+	return nil
 }
 
 func copyFile(src, dst string) error {
@@ -809,6 +823,16 @@ func runCmd(name string, args ...string) error {
 		return fmt.Errorf("command failed: %w", err)
 	}
 	return nil
+}
+
+func isRetryableDriverReinstallError(err error) bool {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1072 {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "exit status 1072") ||
+		strings.Contains(msg, "marked for deletion")
 }
 
 func scanAndPrintHints(err error) {
