@@ -1,6 +1,6 @@
 
 go mod tidy
-go build -o ecdisk.exe .
+go build -o ecdisk.exe ./cmd/ecdisk
 
 
 ecdisk.exe init --container D:\vault.ecd --size-gb 20 --extent-mb 4
