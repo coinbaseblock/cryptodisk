@@ -77,16 +77,23 @@ func cmdBackendDoctor(args []string) error {
 func cmdRepairBackend(args []string) error {
 	fs := flag.NewFlagSet("repair-backend", flag.ContinueOnError)
 	winfspInstaller := fs.String("winfsp-installer", "", "path to a WinFsp MSI installer or a directory containing one")
-	winspdDir := fs.String("winspd-dir", "", "path to extracted WinSpd payload directory")
+	winspdDir := fs.String("winspd-dir", "", "path to an extracted WinSpd payload directory or WinSpd MSI")
 	scriptOut := fs.String("script-out", "", "optional path to save a PowerShell repair script")
 	dryRun := fs.Bool("dry-run", false, "print checks only; do not modify the system")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	artifacts, artErr := discoverWinSpdArtifacts(*winspdDir)
+	artifacts, cleanupArtifacts, artErr := discoverWinSpdArtifacts(*winspdDir)
+	defer cleanupArtifacts()
+	renderArtifacts := artifacts
+	renderArtErr := artErr
+	if sourceLooksLikeMSI(*winspdDir) && renderArtErr == nil {
+		renderArtifacts = backendArtifacts{}
+		renderArtErr = errors.New("WinSpd MSI input is supported for live repair, but --script-out needs an extracted WinSpd payload directory")
+	}
 	if *scriptOut != "" {
-		script, err := renderBackendRepairScript(*winfspInstaller, artifacts, artErr)
+		script, err := renderBackendRepairScript(*winfspInstaller, renderArtifacts, renderArtErr)
 		if err != nil {
 			return err
 		}
@@ -554,36 +561,117 @@ func resolveWinFspInstaller(installer string) (string, error) {
 	return matches[0], nil
 }
 
-func discoverWinSpdArtifacts(root string) (backendArtifacts, error) {
-	if strings.TrimSpace(root) == "" {
-		return backendArtifacts{}, errors.New("WinSpd payload directory was not provided")
+func sourceLooksLikeMSI(path string) bool {
+	resolved, err := resolveOptionalLocalPath(path)
+	if err != nil {
+		resolved = strings.TrimSpace(path)
 	}
+	return strings.EqualFold(filepath.Ext(resolved), ".msi")
+}
+
+func discoverWinSpdArtifacts(root string) (backendArtifacts, func(), error) {
+	if strings.TrimSpace(root) == "" {
+		return backendArtifacts{}, func() {}, errors.New("WinSpd payload path was not provided")
+	}
+
+	resolved, err := resolveOptionalLocalPath(root)
+	if err != nil {
+		return backendArtifacts{}, func() {}, err
+	}
+
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return backendArtifacts{}, func() {}, err
+	}
+
+	cleanup := func() {}
+	if !info.IsDir() {
+		if !strings.EqualFold(filepath.Ext(resolved), ".msi") {
+			return backendArtifacts{}, cleanup, fmt.Errorf("WinSpd payload must be a directory or .msi file: %s", resolved)
+		}
+		extractedRoot, extractErr := extractMSIToTemp(resolved)
+		if extractErr != nil {
+			return backendArtifacts{}, cleanup, fmt.Errorf("extract WinSpd MSI: %w", extractErr)
+		}
+		resolved = extractedRoot
+		cleanup = func() { _ = os.RemoveAll(extractedRoot) }
+	}
+
+	art, err := scanWinSpdPayload(resolved)
+	if err != nil {
+		return art, cleanup, err
+	}
+	return art, cleanup, nil
+}
+
+func resolveOptionalLocalPath(input string) (string, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", errors.New("path is empty")
+	}
+	if _, err := os.Stat(input); err == nil {
+		return filepath.Clean(input), nil
+	}
+	base := filepath.Base(input)
+	for _, dir := range probeDirs() {
+		candidate := filepath.Join(dir, base)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("path not found: %s", input)
+}
+
+func extractMSIToTemp(msiPath string) (string, error) {
+	tempDir, err := os.MkdirTemp("", "ecdisk-winspd-*")
+	if err != nil {
+		return "", err
+	}
+	cmd := exec.Command("msiexec.exe", "/a", msiPath, "/qn", "/norestart", "TARGETDIR="+tempDir)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		_ = os.RemoveAll(tempDir)
+		msg := strings.TrimSpace(string(out))
+		if msg != "" {
+			return "", fmt.Errorf("%w\n%s", err, msg)
+		}
+		return "", err
+	}
+	return tempDir, nil
+}
+
+func scanWinSpdPayload(root string) (backendArtifacts, error) {
 	root = filepath.Clean(root)
-	entries, err := os.ReadDir(root)
+	art := backendArtifacts{Root: root}
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		name := strings.ToLower(d.Name())
+		switch {
+		case strings.HasPrefix(name, "devsetup-") && strings.HasSuffix(name, ".exe") && art.DevSetupExe == "":
+			art.DevSetupExe = path
+		case strings.HasSuffix(name, ".inf") && art.InfFile == "":
+			art.InfFile = path
+		case strings.HasPrefix(name, "winspd-") && strings.HasSuffix(name, ".dll"):
+			art.DLLs = append(art.DLLs, path)
+		}
+		return nil
+	})
 	if err != nil {
 		return backendArtifacts{}, err
 	}
-	art := backendArtifacts{Root: root}
-	for _, entry := range entries {
-		name := strings.ToLower(entry.Name())
-		full := filepath.Join(root, entry.Name())
-		switch {
-		case strings.HasPrefix(name, "devsetup-") && strings.HasSuffix(name, ".exe"):
-			art.DevSetupExe = full
-		case strings.HasSuffix(name, ".inf") && art.InfFile == "":
-			art.InfFile = full
-		case strings.HasPrefix(name, "winspd-") && strings.HasSuffix(name, ".dll"):
-			art.DLLs = append(art.DLLs, full)
-		}
-	}
 	if art.DevSetupExe == "" {
-		return art, errors.New("missing devsetup-*.exe in WinSpd payload directory")
+		return art, errors.New("missing devsetup-*.exe in WinSpd payload")
 	}
 	if art.InfFile == "" {
-		return art, errors.New("missing WinSpd .inf file in payload directory")
+		return art, errors.New("missing WinSpd .inf file in payload")
 	}
 	if len(art.DLLs) == 0 {
-		return art, errors.New("missing winspd-*.dll in payload directory")
+		return art, errors.New("missing winspd-*.dll in payload")
 	}
 	art.HardwareID, err = parseHardwareIDFromINF(art.InfFile)
 	if err != nil {
@@ -612,26 +700,28 @@ func deployWinSpdArtifacts(art backendArtifacts) error {
 		return err
 	}
 	destDir := filepath.Dir(exePath)
-	entries, err := os.ReadDir(art.Root)
-	if err != nil {
-		return err
-	}
 	copied := 0
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
+	err = filepath.WalkDir(art.Root, func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
-		name := strings.ToLower(entry.Name())
+		if d.IsDir() {
+			return nil
+		}
+		name := strings.ToLower(d.Name())
 		if !(strings.HasPrefix(name, "winspd-") || strings.HasPrefix(name, "launch") || strings.HasPrefix(name, "devsetup-")) {
-			continue
+			return nil
 		}
-		src := filepath.Join(art.Root, entry.Name())
-		dst := filepath.Join(destDir, entry.Name())
-		if err := copyFile(src, dst); err != nil {
+		dst := filepath.Join(destDir, d.Name())
+		if err := copyFile(path, dst); err != nil {
 			return err
 		}
-		fmt.Printf("       copied %s -> %s\n", src, dst)
+		fmt.Printf("       copied %s -> %s\n", path, dst)
 		copied++
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 	if copied == 0 {
 		return errors.New("no WinSpd payload files were copied")

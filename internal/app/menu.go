@@ -330,7 +330,7 @@ func menuBackendRepair() {
 	}
 
 	winfspInstaller, _ := promptInput("WinFsp MSI file or directory (optional): ")
-	winspdDir, _ := promptInput("WinSpd payload directory (optional): ")
+	winspdDir, _ := promptInput("WinSpd payload directory or MSI (optional): ")
 	scriptOut, _ := promptInput("Write PowerShell script to file (optional): ")
 
 	args := []string{}

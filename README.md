@@ -87,7 +87,7 @@ The interactive menu still shows mount/unmount on Windows now, so you can enter 
 This build also adds:
 
 - `backend-doctor` to print a step-by-step diagnostic of the current WinFsp / WinSpd state.
-- `repair-backend` to stop old services, remove stale registrations, optionally reinstall WinFsp from a local MSI (or a directory containing one), optionally redeploy WinSpd from a local extracted payload directory, and print where the process failed if anything is still wrong.
+- `repair-backend` to stop old services, remove stale registrations, optionally reinstall WinFsp from a local MSI (or a directory containing one), optionally redeploy WinSpd from a local extracted payload directory or WinSpd MSI, and print where the process failed if anything is still wrong.
 - Interactive menu option `9` (`Repair Mount Backend`) as a guided wrapper around the same repair flow.
 
 Example repair flow:
@@ -99,7 +99,7 @@ ecdisk.exe repair-backend --winfsp-installer C:\installers\winfsp.msi --winspd-d
 ecdisk.exe repair-backend --winfsp-installer C:\installers --winspd-dir C:\installers\winspd
 ```
 
-The WinSpd payload directory should contain the files from a matching WinSpd package, including `devsetup-*.exe`, at least one `winspd-*.dll`, and the driver `.inf` file. The repair command will report the exact missing file when the directory is incomplete.
+`--winspd-dir` now accepts either an extracted WinSpd payload directory or a WinSpd `.msi` package. When you pass a directory, it should contain the files from a matching WinSpd package, including `devsetup-*.exe`, at least one `winspd-*.dll`, and the driver `.inf` file. The repair command will report the exact missing file when the directory or extracted MSI contents are incomplete.
 
 All other features (create, inspect, change password, recover, VHDX creation) work independently of WinSpd.
 
