@@ -1,6 +1,8 @@
 package app
 
 import (
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -57,6 +59,52 @@ func TestMenuEntry_AllKeysPresent(t *testing.T) {
 		if !keys[k] {
 			t.Errorf("missing menu key %s", k)
 		}
+	}
+}
+
+func TestMenuLabel_MountEntries(t *testing.T) {
+	tests := []struct {
+		name     string
+		entry    menuEntry
+		contains string
+	}{
+		{
+			name:     "non-mount entry unchanged",
+			entry:    menuEntry{key: "1", label: "Create Container"},
+			contains: "Create Container",
+		},
+		{
+			name:     "mount entry keeps base label",
+			entry:    menuEntry{key: "7", label: "Mount Container"},
+			contains: "Mount Container",
+		},
+		{
+			name:     "unmount entry keeps base label",
+			entry:    menuEntry{key: "8", label: "Unmount Container"},
+			contains: "Unmount Container",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := menuLabel(tt.entry)
+			if !strings.Contains(got, tt.contains) {
+				t.Fatalf("menuLabel(%+v) = %q, want substring %q", tt.entry, got, tt.contains)
+			}
+		})
+	}
+}
+
+func TestMountMenuSuffix(t *testing.T) {
+	got := mountMenuSuffix()
+	if runtime.GOOS == "windows" {
+		if !strings.Contains(got, "requires WinSpd-compatible backend") {
+			t.Fatalf("mountMenuSuffix() = %q, want Windows backend hint", got)
+		}
+		return
+	}
+	if got != "" {
+		t.Fatalf("mountMenuSuffix() = %q, want empty string on %s", got, runtime.GOOS)
 	}
 }
 
