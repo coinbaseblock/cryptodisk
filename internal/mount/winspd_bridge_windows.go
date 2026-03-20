@@ -22,10 +22,11 @@ import (
 // ── WinSpd DLL bindings ─────────────────────────────────────────
 
 // spdDLLCandidates lists DLL names to try, in order of preference.
-// The SPD (Storage Proxy Driver) API lives in the standalone WinSpd DLL
-// (winspd-{arch}.dll) from https://github.com/winfsp/winspd. WinFsp does
-// NOT export SPD symbols; we include winfsp-{arch}.dll as a speculative
-// fallback in case a future WinFsp release integrates SPD support.
+// The SPD (Storage Proxy Driver) API was originally in the standalone WinSpd
+// DLL (winspd-{arch}.dll) from https://github.com/winfsp/winspd, but that
+// project is no longer actively maintained and releases may be unavailable.
+// We include winfsp-{arch}.dll as a fallback in case a future WinFsp release
+// integrates SPD support.
 // On ARM64 Windows we prefer the a64 (native) DLLs first, then fall back
 // to x64 which may work under emulation.
 var spdDLLCandidates = func() []string {
@@ -367,8 +368,6 @@ func detectWinSpdVersion() string {
 }
 
 func missingBackendHint() string {
-	const spdURL = "https://github.com/winfsp/winspd/releases"
-
 	// Check whether a winspd DLL exists but was renamed (e.g. .bak).
 	renamedHint := ""
 	if exePath, err := os.Executable(); err == nil {
@@ -378,19 +377,29 @@ func missingBackendHint() string {
 		}
 	}
 
+	if renamedHint != "" {
+		return "WinSpd DLL found but renamed." + renamedHint
+	}
+
 	if winfspInstallDir() != "" {
-		return fmt.Sprintf(
-			"WinFsp is installed but does not include block-device (SPD) support. "+
-				"Install the standalone WinSpd driver from %s%s", spdURL, renamedHint)
+		return "WinFsp is installed but does not include block-device (SPD) support. " +
+			"The standalone WinSpd project (https://github.com/winfsp/winspd) is no longer actively maintained " +
+			"and its releases may be unavailable. " +
+			"Windows mount support in ecdisk requires a WinSpd-compatible driver which is currently not readily obtainable. " +
+			"Consider using WinFsp 2.0+ if it adds SPD support: https://github.com/winfsp/winfsp/releases"
 	}
 
 	if _, found := bundledWinFspDir(); found {
-		return fmt.Sprintf(
-			"WinFsp runtime files were found nearby but WinFsp alone cannot expose a block device. "+
-				"Install the standalone WinSpd driver from %s%s", spdURL, renamedHint)
+		return "WinFsp runtime files were found nearby but WinFsp alone cannot expose a block device. " +
+			"The standalone WinSpd driver is no longer actively maintained and may be unavailable. " +
+			"Windows mount support requires a WinSpd-compatible driver. " +
+			"Consider using WinFsp 2.0+ if it adds SPD support: https://github.com/winfsp/winfsp/releases"
 	}
 
-	return fmt.Sprintf("install the WinSpd driver from %s%s", spdURL, renamedHint)
+	return "no block-device (SPD) driver found. " +
+		"Windows mount requires either WinSpd (no longer actively maintained; releases may be unavailable at " +
+		"https://github.com/winfsp/winspd) or a future WinFsp version with SPD support " +
+		"(https://github.com/winfsp/winfsp/releases)"
 }
 
 func bundledWinFspDir() (string, bool) {
