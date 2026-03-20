@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 )
 
@@ -58,9 +59,18 @@ var mainMenu = [][]menuEntry{
 		{"6", "Create Diff VHDX"},
 	},
 	{
-		{"7", "Mount Container"},
-		{"8", "Unmount Container"},
+		{"7", "Mount Container" + mountMenuSuffix()},
+		{"8", "Unmount Container" + mountMenuSuffix()},
 	},
+}
+
+// mountMenuSuffix returns a warning suffix for mount menu items on Windows,
+// where the WinSpd dependency is no longer readily available.
+func mountMenuSuffix() string {
+	if runtime.GOOS == "windows" {
+		return " " + colorDim + "(WinSpd required — see README)" + colorReset
+	}
+	return ""
 }
 
 func interactiveMenu() {
@@ -253,6 +263,12 @@ func menuDiffVHDX() {
 
 func menuMount() {
 	menuHeader("Mount Container")
+
+	if runtime.GOOS == "windows" {
+		fmt.Printf("  %sWarning:%s The WinSpd driver required for Windows mount is no longer\n", colorRed, colorReset)
+		fmt.Printf("  actively maintained and may not be available for download.\n")
+		fmt.Printf("  See README.md for details and alternatives.\n\n")
+	}
 
 	path, err := promptInput("Container file path: ")
 	if err != nil || path == "" {
